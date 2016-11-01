@@ -147,11 +147,14 @@ void loop() {
       ramWrites = 0;
     }
 
-    if (digitalRead(SLAM_PIN) == LOW && !slamSwPushed) {
-      Serial.println(F("Slam Switch pushed!"));
+    if (slamSw && !slamSwPushed) { // active LOW
+      Serial.println(F("Slam Switch closed!"));
       slamSwPushed = true;
     }
-    else slamSwPushed = false;
+    else if (!slamSw && slamSwPushed) {
+      Serial.println(F("Slam Switch released"));
+      slamSwPushed = false;
+    }
     
     // AUX button implementation
     if (digitalRead(AUXB_PIN) == LOW && !resetPushed) {
@@ -170,6 +173,7 @@ void loop() {
     Serial.print(F(" IRQ proc'd - addr: $"));
     Serial.println(iADR, HEX);
 
+/*
     // RIOTs stats output
     Serial.print(F("RIOTs IRQ reqs: "));
     for (i=0; i<3; i++) {
@@ -180,7 +184,10 @@ void loop() {
     Serial.print(F("RIOTs IRQ collisions: "));
     for (i=0; i<3; i++) {
       Serial.print(getRiotLostIrqCount(i));
-      if (i == 2) Serial.println(""); 
+      if (i == 2) {
+          Serial.print(" irqRequest="); 
+          Serial.println(irqRequest);
+      }
       else Serial.print(", ");
     }
     Serial.print(F("RIOTs timer writes: "));
@@ -189,6 +196,13 @@ void loop() {
       if (i == 2) Serial.print(" - "); 
       else Serial.print(", ");
     }
+    Serial.print(F("RIOTs PIO reads: "));
+    for (i=0; i<3; i++) {
+      Serial.print(getRiotPioReads(i));
+      if (i == 2) Serial.print(" - "); 
+      else Serial.print(", ");
+    }
+    
     Serial.print(F("RIOTs PIO writes: "));
     for (i=0; i<3; i++) {
       Serial.print(getRiotPioWrites(i));
@@ -205,7 +219,15 @@ void loop() {
       if (i == 4) Serial.println(""); 
       else Serial.print(", ");
     }
-
+*/
+    // returns cache
+    Serial.print(F("Returns cache: ["));
+    for (i=0; i<8; i++) {
+      Serial.print(returnsCache[i]);
+      if (i == 7) Serial.println("]"); 
+      else Serial.print(", ");
+    }
+    
     // display output sample
     printDisplays();
     

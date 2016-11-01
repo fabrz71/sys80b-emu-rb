@@ -98,7 +98,7 @@ byte dasm(uint16_t adr) {
     case 0x10: // relative
       printval(ir, a1);
       Serial.print("$");
-      Serial.print((a1 <= 0x7f) ? adr + 2 + (uint16_t)a1 : adr + 2 - (uint16_t)((~(a1 - 1)) & 0xff), HEX);
+      Serial.print((a1 <= 0x7f) ? adr + 2 + (uint16_t)a1 : adr + 2 - (uint16_t)(((byte)~(a1 - 1)) & 0xff), HEX);
       r = 2;
       break;
     case 0x11: // (indir),Y

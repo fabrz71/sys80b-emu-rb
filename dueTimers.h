@@ -5,6 +5,8 @@ const uint32_t TC_K = VARIANT_MCK/32 / 1000ul; // timer time constant
 const uint32_t HWTMR_CORR = 6ul; // hardware timer delay corrector (us)
 const uint32_t MIN_TIMER_TIME = 10ul; //us
 
+byte tmrBit[] = { 0b001, 0b010, 0b100 };
+
 uint32_t rc;
 
 void initTimers();
@@ -29,7 +31,7 @@ void startTimer(uint32_t us, uint32_t ch) {
   //if (us < MIN_TIMER_TIME) us = MIN_TIMER_TIME;
   if (us < MIN_TIMER_TIME) { // very short time = does not use HW timer
     delayMicroseconds(us);
-    dueTimerIrq |= bit(ch); // simulate a DUE timer irq event
+    dueTimerIrq |= tmrBit[ch]; // simulate a DUE timer irq event
     return;
   }
   //else if (us > 1000000ul) us = 1000000ul;

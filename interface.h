@@ -42,8 +42,8 @@ extern const byte IOEN_PIN;
 byte opSwtch[] = { 0b00000011, 0b00000111, 0b00000001, 0b11000010 };
 
 // System I/O signals
-byte strobesN; // outputs
-byte returnsN; // inputs
+byte strobesN = 0xff; // outputs
+byte returnsN = 0xff; // inputs
 uint16_t solenoids; // outputs
 //bool solenoid9; // output
 byte sound; // outputs
@@ -88,7 +88,8 @@ void initInterface() {
   debugLedsOutput(5);
   readSysReturns();
   debugLedsOutput(6);
-  initLedGrid(LG_CS_PIN, LG_LOAD_PIN);
+  //initLedGrid(LG_CS_PIN, LG_LOAD_PIN);
+  initLedGrid(LG_CS_PIN);
   attachInterrupt(SLAM_PIN, onSlamChanged, CHANGE);
 }
 
@@ -242,10 +243,21 @@ void dispatchOutputData(byte type) {
 // read only system (DUE's) returns and updates returnsN and RIOT-0 inputs
 void readSysReturns() {
   byte portInput;
-  byte strobeNum = demux[~strobesN];
-
+  byte strobeNum;
+  
   returnsN = (byte)(((RETURNS_PORT->PIO_PDSR & RETURNS_bitmask) >> RETURNS_LSB_POS) & 0xff);
-  if (switchEnable == 0) portInput = ~returnsN; // normal mode
+  strobeNum = demux[(byte)~strobesN];
+  if (switchEnable == 0) {
+    portInput = (byte)~returnsN; // normal mode  
+    if (returnsCache[strobeNum] != portInput) {
+    Serial.print("strobe: ");
+    Serial.print((byte)~strobesN);
+    Serial.print("->");
+    Serial.print(strobeNum);
+    Serial.print(": ");
+    Serial.println(portInput);
+    }
+  }
   else portInput = opSwtch[switchSel]; // "operator adjustables" read mode
   returnsCache[strobeNum] = portInput;
   setRiotInputs(0, RIOTPORT_A, portInput); // returns
@@ -265,9 +277,9 @@ void readSysInputs() {
 // ( called by readSysInput() )
 void updateRIOTsInput() {  
   byte portInput;
-  byte strobeNum = demux[~strobesN];
+  byte strobeNum = demux[(byte)~strobesN];
   
-  if (switchEnable == 0) portInput = ~returnsN; // normal mode
+  if (switchEnable == 0) portInput = (byte)~returnsN; // normal mode
   else portInput = opSwtch[switchSel]; // "operator adjustables" read mode
   /*
   else { // normal mode: detects changes
@@ -300,7 +312,7 @@ void updateRIOTsInput() {
 
 // ISR
 void onSlamChanged() {
-  slamSw = (digitalRead(SLAM_PIN) == HIGH) ? false : true;
+  slamSw = (digitalRead(SLAM_PIN) == LOW);
   setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // may yield 6502 IRQ
 }
 

@@ -6,12 +6,14 @@
 #define OPCODEW     0b01000000  // Opcode for MCP23S17 with LSB (bit0) set to write (0), address OR'd in later, bits 1-3
 #define OPCODER     0b01000001  // Opcode for MCP23S17 with LSB (bit0) set to read (1), address OR'd in later, bits 1-3
 
+#define MCP_SPI_CLK 1000000 // hz
+
 #define SPI_CS_PORT PIOA // relative to pin 42
 #define SPI_CS_PPIN 19   // relative to pin 42
 //#define MCP_SPI_CS_OFF digitalWrite(ss_pin, LOW)
 //#define MCP_SPI_CS_ON digitalWrite(ss_pin, HIGH)
-#define MCP_SPI_CS_OFF  SPI_CS_PORT->PIO_CODR = MCP_SPI_CS_bitmask
-#define MCP_SPI_CS_ON   SPI_CS_PORT->PIO_SODR = MCP_SPI_CS_bitmask
+#define MCP_SPI_CS_OFF  SPI.beginTransaction(mcpSpiSetup); SPI_CS_PORT->PIO_CODR = MCP_SPI_CS_bitmask
+#define MCP_SPI_CS_ON   SPI_CS_PORT->PIO_SODR = MCP_SPI_CS_bitmask; SPI.endTransaction()
 
 #define    IODIRA    (0x00)      // MCP23x17 I/O Direction Register
 #define    IPOLA     (0x02)      // MCP23x17 Input Polarity Register
@@ -22,7 +24,10 @@
 
 const unsigned int MCP_SPI_CS_bitmask = ((unsigned int)1) << SPI_CS_PPIN;
 int ss_pin;
-extern const byte SPI_CLK_DIV;
+
+//extern const byte SPI_CLK_DIV;
+
+SPISettings mcpSpiSetup(MCP_SPI_CLK, MSBFIRST, SPI_MODE0);
 
 void MCP_init(int pin);
 void byteWrite(uint8_t adr, uint8_t reg, uint8_t value);
@@ -37,12 +42,21 @@ void mcpWritePA(uint8_t adr, uint8_t value);
 void mcpWritePB(uint8_t adr, uint8_t value);
 
 void MCP_init(int pin) {
+  /*
   ss_pin = pin;
   SPI.begin(ss_pin);
   SPI.setClockDivider(ss_pin, SPI_CLK_DIV);
   SPI.setBitOrder(ss_pin, MSBFIRST);
   SPI.setDataMode(ss_pin, SPI_MODE0);
   byteWrite(0, IOCON, ADDR_ENABLE);
+  */
+  // Enable address mode
+  byteWrite(0, IOCON, ADDR_ENABLE);
+  // Ports data direction
+  wordWrite(0, IODIRA, 0x0000); // all 16 pins set as output
+  mcpWrite(0, 0); // resets MCP0 outputs
+  wordWrite(1, IODIRA, 0x0000); // all 16 pins set as output
+  mcpWrite(1, 0); // resets MCP1 outputs
 }
 
 // GENERIC BYTE WRITE - will write a byte to a register, arguments are register address and the value to write
