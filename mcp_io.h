@@ -54,9 +54,9 @@ void MCP_init(int pin) {
   byteWrite(0, IOCON, ADDR_ENABLE);
   // Ports data direction
   wordWrite(0, IODIRA, 0x0000); // all 16 pins set as output
-  mcpWrite(0, 0); // resets MCP0 outputs
+  mcpWrite(0, 0x0f00); // resets MCP0 outputs
   wordWrite(1, IODIRA, 0x0000); // all 16 pins set as output
-  mcpWrite(1, 0); // resets MCP1 outputs
+  mcpWrite(1, 0x0000); // resets MCP1 outputs
 }
 
 // GENERIC BYTE WRITE - will write a byte to a register, arguments are register address and the value to write

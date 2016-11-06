@@ -8,6 +8,7 @@ const uint32_t MIN_TIMER_TIME = 10ul; //us
 byte tmrBit[] = { 0b001, 0b010, 0b100 };
 
 uint32_t rc;
+uint32_t shortTimerDelayCount[3]; // (stats)
 
 void initTimers();
 void startTimer(uint32_t us, uint32_t channel);
@@ -21,6 +22,7 @@ void initTimers() {
     TC_Configure(TC1, i, TC_CMR_WAVE | TC_CMR_WAVSEL_UP_RC | TC_CMR_TCCLKS_TIMER_CLOCK3);
     TC1->TC_CHANNEL[i].TC_IER=TC_IER_CPCS;
     TC1->TC_CHANNEL[i].TC_IDR=~TC_IER_CPCS;
+    shortTimerDelayCount[i] = 0;
   }
   dueTimerIrq = 0;
 }
@@ -32,6 +34,7 @@ void startTimer(uint32_t us, uint32_t ch) {
   if (us < MIN_TIMER_TIME) { // very short time = does not use HW timer
     delayMicroseconds(us);
     dueTimerIrq |= tmrBit[ch]; // simulate a DUE timer irq event
+    shortTimerDelayCount[ch]++;
     return;
   }
   //else if (us > 1000000ul) us = 1000000ul;

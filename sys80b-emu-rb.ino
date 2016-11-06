@@ -12,6 +12,7 @@
 
 #define BAUDRATE 57600
 #define BATCH_CLK_COUNT 50000
+#define INFO_DELAY 1000
 
 //#define PROMFILE "PROM.BIN"
 #define PROMFILE "PROM1.CPU"
@@ -85,7 +86,6 @@ void setup() {
   debugLedsOutput(2);
   loadRAM(ram, RAMFILE); // loads last RAM data in ram[]
   debugLedsOutput(3);
-  //disableSD();
 
   Serial.println(F("RIOTs reset..."));
   resetRIOTs();
@@ -104,14 +104,13 @@ void setup() {
   Serial.print(F("IRQ vector at: $"));
   uint16_t ad = FETCHW(IRQ_VECTOR);
   Serial.println(ad, HEX);
-  
-  /*
+/*
   // GPIO test
   Serial.println(F("Testing GPIO..."));
   testInterface();
   Serial.println(F("end of test."));
-  */
-  
+  infiniteLoop();
+*/
   Serial.println(F("Go..."));
   lcd.clear();
   lcdprn("Running...", 0);
@@ -124,13 +123,15 @@ void loop() {
   long cCount = 0;
   long startT;
   uint16_t prevAdr = 0;
+  //char ch;
+  String cmd;
   
   startT = millis();
   if (!stopExecution) {
     irqCalls = irqCount;
     
     // CPU emulation cycle
-    while (millis() - startT < 1000) {
+    while (millis() - startT < INFO_DELAY) {
       iCount += execBatch(BATCH_CLK_COUNT);
       cCount += BATCH_CLK_COUNT;
     }
@@ -140,7 +141,6 @@ void loop() {
     // non-volatile RAM updates
     if (ramMod) {
       updateRAM(ram, RAMFILE);
-      //disableSD();
       Serial.print(ramWrites);
       Serial.println(F(" RAM bytes writes."));
       ramMod = false;
@@ -163,16 +163,15 @@ void loop() {
       resetPushed = true;
     }
     else resetPushed = false;
-    
+  
     // CPU stats output
     Serial.print(iCount);
     Serial.print(F(" istructions - "));
     Serial.print(cCount);
     Serial.print(F(" clock ticks (about) - "));
     Serial.print(irqCount - irqCalls);
-    Serial.print(F(" IRQ proc'd - addr: $"));
+    Serial.print(F(" IRQ - adr: $"));
     Serial.println(iADR, HEX);
-
 /*
     // RIOTs stats output
     Serial.print(F("RIOTs IRQ reqs: "));
@@ -196,19 +195,30 @@ void loop() {
       if (i == 2) Serial.print(" - "); 
       else Serial.print(", ");
     }
-    Serial.print(F("RIOTs PIO reads: "));
+*/
+    
+    Serial.print(F("RIOTs reads: "));
     for (i=0; i<3; i++) {
-      Serial.print(getRiotPioReads(i));
-      if (i == 2) Serial.print(" - "); 
-      else Serial.print(", ");
+      Serial.print(i);
+      Serial.print(": (A=");
+      Serial.print(getRiotPioReadsA(i));
+      Serial.print(",B=");
+      Serial.print(getRiotPioReadsB(i));
+      if (i == 2) Serial.println(")"); else Serial.print("), ");
     }
     
-    Serial.print(F("RIOTs PIO writes: "));
+    Serial.print(F("RIOTs writes: "));
     for (i=0; i<3; i++) {
-      Serial.print(getRiotPioWrites(i));
-      if (i == 2) Serial.println(""); 
-      else Serial.print(", ");
+      Serial.print(i);
+      Serial.print(": (A=");
+      Serial.print(getRiotPioWritesA(i));
+      Serial.print(",B=");
+      Serial.print(getRiotPioWritesB(i));
+      if (i == 2) Serial.println(")"); else Serial.print("), ");
     }
+/*
+    Serial.print(F("slamSwitch interrupts: "));
+    Serial.println(slamIntCount);
 
     // outputs stats
     Serial.print(F("Output changes: "));
@@ -219,7 +229,7 @@ void loop() {
       if (i == 4) Serial.println(""); 
       else Serial.print(", ");
     }
-*/
+
     // returns cache
     Serial.print(F("Returns cache: ["));
     for (i=0; i<8; i++) {
@@ -227,8 +237,8 @@ void loop() {
       if (i == 7) Serial.println("]"); 
       else Serial.print(", ");
     }
-    
-    // display output sample
+*/
+    // display output
     printDisplays();
     
     // CPU lock detection
@@ -237,7 +247,33 @@ void loop() {
       dumpHistory();
     }
     prevAdr = iADR;
-    
+
+    // escape key
+    for (i=0; i<8; i++) forcedReturn[i] = 0;
+    if (Serial.available() > 0) {
+      //Serial.println(F(">Serial input detected..."));
+      cmd = Serial.readString();
+      if (cmd.equals("\\")) { // STOPS EXECUTION
+        stopExecution = true;
+        Serial.print(F("timers short delay events: "));
+        for (i=0; i<3; i++) {
+          Serial.print(shortTimerDelayCount[i]);
+          if (i == 2) Serial.println(""); else Serial.print(", ");
+        }
+        Serial.println(F("*** EXECUTION STOPPED ***"));
+      }
+      else {
+        byte sw;
+        sw = cmd.toInt();
+        if (sw > 0) {
+          forcedReturn[sw/10+1] = (byte)(1<<(sw%10));
+          Serial.print(F("Forced return: "));
+          Serial.print(sw%10);
+          Serial.print(F(" on strobe "));
+          Serial.println(sw/10);
+        }
+      }
+    }
   }
   else infiniteLoop(); // CPU execution stop
 }

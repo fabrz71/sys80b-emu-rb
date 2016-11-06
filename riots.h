@@ -26,43 +26,17 @@
 const word RIOT_period[] = { 1, 8, 64, 1024 };
 
 // RIOTs
-//struct riotData {
-//  // RAM section
-//  volatile byte ram[128]; // RIOT's sRAM
-//  // I/O section
-//  volatile byte irA, irB; // (virtual) input register A & B
-//  volatile byte orA, orB; // output registers A & B
-//  volatile byte ddrA, ddrB; // data direction registers A & B
-//  // timer register
-//  volatile byte intervals; // interval timer register
-//  volatile word period; // 1T, 8T, 64T, 1024T (T = ticks)
-//  volatile byte flags; 	// bit 0 (0x01): edge detect type (input)
-//  // bit 1 (0x02): PA7 interrupt enable (input)
-//  // bit 3 (0x08): timer interrupt enable (input)
-//  // bit 6 (0x40): PA7 interrupt flag (output)
-//  // bit 7 (0x80): timer interrupt flag (output)
-//  
-//  // meta-registers
-//  volatile unsigned long zeroTime; // timer zero time : 0 = disabled (running flag)
-//  byte lastPA7; // 7-th bit of irA on last check (used for edge detection)
-//  volatile bool irqSent; // cpu IRQ signal already sent (stats)
-//  volatile word irqCount; // cpu IRQ signals count (stats)
-//  volatile word irqColl; // cpu IRQ collisions (stats)
-//  word timerWrts; // timer updates (stats)
-//  word pioWrts; // port updates (stats)
-//};
-
 struct riotData {
   // RAM section
-  byte ram[128]; // RIOT's sRAM
+  volatile byte ram[128]; // RIOT's sRAM
   // I/O section
-  byte irA, irB; // (virtual) input register A & B
-  byte orA, orB; // output registers A & B
+  volatile byte irA, irB; // (virtual) input register A & B
+  volatile byte orA, orB; // output registers A & B
   byte ddrA, ddrB; // data direction registers A & B
   // timer register
   byte intervals; // interval timer register
   word period; // 1T, 8T, 64T, 1024T (T = ticks)
-  byte flags;   // bit 0 (0x01): edge detect type (input)
+  volatile byte flags;   // bit 0 (0x01): edge detect type (input)
   // bit 1 (0x02): PA7 interrupt enable (input)
   // bit 3 (0x08): timer interrupt enable (input)
   // bit 6 (0x40): PA7 interrupt flag (output)
@@ -75,8 +49,10 @@ struct riotData {
   word irqCount; // cpu IRQ signals count (stats)
   word irqColl; // cpu IRQ collisions (stats)
   word timerWrts; // timer updates (stats)
-  word pioRds; // port reads (stats)
-  word pioWrts; // port updates (stats)
+  word pioRdsA; // port A reads (stats)
+  word pioRdsB; // port B reads (stats)
+  word pioWrtsA; // port A updates (stats)
+  word pioWrtsB; // port B updates (stats)
 };
 
 extern volatile int irqRequest; // emu6502.h
@@ -97,8 +73,10 @@ void setRiotInputs(byte id, byte port, byte data);
 void onDueTimerIrq();
 word getRiotIrqCount(byte n);
 word getRiotLostIrqCount(byte n);
-word getRiotTimerWrites(byte n);
-word getRiotPioWrites(byte n);
+word getRiotTimerWritesA(byte n);
+word getRiotPioWritesA(byte n);
+word getRiotTimerWritesB(byte n);
+word getRiotPioWritesB(byte n);
 
 void resetRIOT(byte n) {
   struct riotData *r = &(riot[n]);
@@ -115,8 +93,10 @@ void resetRIOT(byte n) {
   r->irqCount = 0;
   r->irqColl = 0;
   r->timerWrts = 0;
-  r->pioRds = 0;
-  r->pioWrts = 0;
+  r->pioRdsA = 0;
+  r->pioRdsB = 0;
+  r->pioWrtsA = 0;
+  r->pioWrtsB = 0;
   //nextPendingTimer = -1;
 }
 
@@ -159,7 +139,7 @@ void writeRiot(word adr, byte dta) {
     else { // A4=0
       switch (adr & 0x07) { // A2, A1, A0
         case 0x0: // write output A register
-          r->pioWrts++;
+          r->pioWrtsA++;
           r->orA = dta;
           onRiotOutputChanged(n, RIOTPORT_A, r->orA, r->orB);
           break;
@@ -167,7 +147,7 @@ void writeRiot(word adr, byte dta) {
           r->ddrA = dta;
           break;
         case 0x2: // write output B register
-          r->pioWrts++;
+          r->pioWrtsB++;
           r->orB = dta;
           onRiotOutputChanged(n, RIOTPORT_B, r->orA, r->orB);
           break;
@@ -198,8 +178,8 @@ byte readRiot(word adr) {
     switch (adr & 0x0F) { // A3, A2, A1, A0
       case 0x0: // read port A register
       case 0x8:
-        r->pioRds++;
-        readSysReturns();
+        r->pioRdsA++;
+        if (n == 0) readSysReturns();
         dta = r->irA | (r->orA & r->ddrA);
         break;
       case 0x1: // read A data direction register
@@ -208,8 +188,8 @@ byte readRiot(word adr) {
         break;
       case 0x2: // read port B register
       case 0xa:
-        r->pioRds++;
-        readSysReturns();
+        r->pioRdsB++;
+        if (n == 0) readSysReturns();
         dta = r->irB | (r->orA & r->ddrB);
         break;
       case 0x3: // read B data direction register
@@ -347,14 +327,26 @@ word getRiotTimerWrites(byte n) {
   return i;
 }
 
-word getRiotPioReads(byte n) {
-  word i = riot[n].pioRds;
-  riot[n].pioRds = 0;
+word getRiotPioReadsA(byte n) {
+  word i = riot[n].pioRdsA;
+  riot[n].pioRdsA = 0;
   return i;
 }
 
-word getRiotPioWrites(byte n) {
-  word i = riot[n].pioWrts;
-  riot[n].pioWrts = 0;
+word getRiotPioWritesA(byte n) {
+  word i = riot[n].pioWrtsA;
+  riot[n].pioWrtsA = 0;
+  return i;
+}
+
+word getRiotPioReadsB(byte n) {
+  word i = riot[n].pioRdsB;
+  riot[n].pioRdsB = 0;
+  return i;
+}
+
+word getRiotPioWritesB(byte n) {
+  word i = riot[n].pioWrtsB;
+  riot[n].pioWrtsB = 0;
   return i;
 }
