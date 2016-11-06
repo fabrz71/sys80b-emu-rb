@@ -15,54 +15,28 @@
 // interrupt flag from timer
 #define TMR_INTF 128 // (state output)
 
-#define CLEARFLAG(r,f) r->flags &= ~((byte)(f))
+#define CLEARFLAG(r,f) r->flags &= (byte)~((byte)(f))
 #define SETFLAG(r,f) r->flags |= (byte)(f)
 #define FLAG(r,f) ((r->flags & (byte)(f)) != 0)
 
-#define CLEARFL(n,f) riot[n].flags &= ~((byte)(f))
+#define CLEARFL(n,f) riot[n].flags &= (byte)~((byte)(f))
 #define SETFL(n,f) riot[n].flags |= (byte)(f)
 #define FL(n,f) ((riot[n].flags & (byte)(f)) != 0)
 
 const word RIOT_period[] = { 1, 8, 64, 1024 };
 
 // RIOTs
-//struct riotData {
-//  // RAM section
-//  volatile byte ram[128]; // RIOT's sRAM
-//  // I/O section
-//  volatile byte irA, irB; // (virtual) input register A & B
-//  volatile byte orA, orB; // output registers A & B
-//  volatile byte ddrA, ddrB; // data direction registers A & B
-//  // timer register
-//  volatile byte intervals; // interval timer register
-//  volatile word period; // 1T, 8T, 64T, 1024T (T = ticks)
-//  volatile byte flags; 	// bit 0 (0x01): edge detect type (input)
-//  // bit 1 (0x02): PA7 interrupt enable (input)
-//  // bit 3 (0x08): timer interrupt enable (input)
-//  // bit 6 (0x40): PA7 interrupt flag (output)
-//  // bit 7 (0x80): timer interrupt flag (output)
-//  
-//  // meta-registers
-//  volatile unsigned long zeroTime; // timer zero time : 0 = disabled (running flag)
-//  byte lastPA7; // 7-th bit of irA on last check (used for edge detection)
-//  volatile bool irqSent; // cpu IRQ signal already sent (stats)
-//  volatile word irqCount; // cpu IRQ signals count (stats)
-//  volatile word irqColl; // cpu IRQ collisions (stats)
-//  word timerWrts; // timer updates (stats)
-//  word pioWrts; // port updates (stats)
-//};
-
 struct riotData {
   // RAM section
-  byte ram[128]; // RIOT's sRAM
+  volatile byte ram[128]; // RIOT's sRAM
   // I/O section
-  byte irA, irB; // (virtual) input register A & B
-  byte orA, orB; // output registers A & B
+  volatile byte irA, irB; // (virtual) input register A & B
+  volatile byte orA, orB; // output registers A & B
   byte ddrA, ddrB; // data direction registers A & B
   // timer register
   byte intervals; // interval timer register
   word period; // 1T, 8T, 64T, 1024T (T = ticks)
-  byte flags;   // bit 0 (0x01): edge detect type (input)
+  volatile byte flags;   // bit 0 (0x01): edge detect type (input)
   // bit 1 (0x02): PA7 interrupt enable (input)
   // bit 3 (0x08): timer interrupt enable (input)
   // bit 6 (0x40): PA7 interrupt flag (output)
@@ -75,7 +49,10 @@ struct riotData {
   word irqCount; // cpu IRQ signals count (stats)
   word irqColl; // cpu IRQ collisions (stats)
   word timerWrts; // timer updates (stats)
-  word pioWrts; // port updates (stats)
+  word pioRdsA; // port A reads (stats)
+  word pioRdsB; // port B reads (stats)
+  word pioWrtsA; // port A updates (stats)
+  word pioWrtsB; // port B updates (stats)
 };
 
 extern volatile int irqRequest; // emu6502.h
@@ -83,7 +60,6 @@ extern volatile byte dueTimerIrq; // dueTimers.h
 struct riotData riot[RIOTS_COUNT];
 
 // function declarations
-//extern void reqIRQ(); // emu6502.h
 extern void readSysReturns(); // interface.h
 extern void onRiotOutputChanged(byte riodId, byte portChanged, byte portA, byte portB); // interface.h
 void resetRIOT(byte n);
@@ -97,8 +73,10 @@ void setRiotInputs(byte id, byte port, byte data);
 void onDueTimerIrq();
 word getRiotIrqCount(byte n);
 word getRiotLostIrqCount(byte n);
-word getRiotTimerWrites(byte n);
-word getRiotPioWrites(byte n);
+word getRiotTimerWritesA(byte n);
+word getRiotPioWritesA(byte n);
+word getRiotTimerWritesB(byte n);
+word getRiotPioWritesB(byte n);
 
 void resetRIOT(byte n) {
   struct riotData *r = &(riot[n]);
@@ -115,7 +93,10 @@ void resetRIOT(byte n) {
   r->irqCount = 0;
   r->irqColl = 0;
   r->timerWrts = 0;
-  r->pioWrts = 0;
+  r->pioRdsA = 0;
+  r->pioRdsB = 0;
+  r->pioWrtsA = 0;
+  r->pioWrtsB = 0;
   //nextPendingTimer = -1;
 }
 
@@ -158,7 +139,7 @@ void writeRiot(word adr, byte dta) {
     else { // A4=0
       switch (adr & 0x07) { // A2, A1, A0
         case 0x0: // write output A register
-          r->pioWrts++;
+          r->pioWrtsA++;
           r->orA = dta;
           onRiotOutputChanged(n, RIOTPORT_A, r->orA, r->orB);
           break;
@@ -166,7 +147,7 @@ void writeRiot(word adr, byte dta) {
           r->ddrA = dta;
           break;
         case 0x2: // write output B register
-          r->pioWrts++;
+          r->pioWrtsB++;
           r->orB = dta;
           onRiotOutputChanged(n, RIOTPORT_B, r->orA, r->orB);
           break;
@@ -197,7 +178,8 @@ byte readRiot(word adr) {
     switch (adr & 0x0F) { // A3, A2, A1, A0
       case 0x0: // read port A register
       case 0x8:
-        readSysReturns();
+        r->pioRdsA++;
+        if (n == 0) readSysReturns();
         dta = r->irA | (r->orA & r->ddrA);
         break;
       case 0x1: // read A data direction register
@@ -206,7 +188,8 @@ byte readRiot(word adr) {
         break;
       case 0x2: // read port B register
       case 0xa:
-        readSysReturns();
+        r->pioRdsB++;
+        if (n == 0) readSysReturns();
         dta = r->irB | (r->orA & r->ddrB);
         break;
       case 0x3: // read B data direction register
@@ -229,6 +212,7 @@ byte readRiot(word adr) {
         updateRiotTimer(r);
         dta = (FLAG(r, TMR_INTF) != 0) ? 0x80 : 0x00; // TMR_INTF -> D7
         if (FLAG(r, PA7_INTF) != 0) dta |= 0x40; // PA7_INTF -> D6
+        //CLEARFLAG(r, TMR_INTF); // NO!
         CLEARFLAG(r, PA7_INTF);
         break;
       default: // should never be reached
@@ -275,64 +259,29 @@ void updateRiotTimer(struct riotData *r) {
 void checkPA7Signal(byte id) {
   byte pa7;
 
-  /*
-  if (FL(id, PA7_IRQ) != 0 && FL(id, PA7_INTF) == 0) { // PA7 interrupt enable
-    pa7 = (riot[id].irA & 0x80) ? 1 : 0;
-    if (pa7 != riot[id].lastPA7) { // on PA7 change
-      if (FL(id, POS_EDGE) != 0) { // positive edge detection
-        if (pa7 == 1) {
-          if (irqRequest) riot[id].irqColl++; else irqRequest = true;
-          SETFL(id, PA7_INTF);
-        }
-      }
-      else { // negative edge detection
-        if (pa7 == 0) {
-          if (irqRequest) riot[id].irqColl++; else irqRequest = true;
-          SETFL(id, PA7_INTF);
-        }
-      }
-      riot[id].lastPA7 = pa7;
-    }
-  }
-  */
-  
-  pa7 = (riot[id].irA & 0x80) ? 1 : 0;
-  if (pa7 != riot[id].lastPA7) { // on PA7 change
+  pa7 = riot[id].irA & 0x80;
+  if (pa7 != riot[id].lastPA7) { // on PA7 change...
     if (FL(id, POS_EDGE) != 0) { // positive edge detection
-      if (pa7 == 1) {
-        SETFL(id, PA7_INTF);
+      if (pa7 > 0) { // PA7 = ON
         if (FL(id, PA7_IRQ) != 0 && FL(id, PA7_INTF) == 0) {
           if (irqRequest) riot[id].irqColl++;
           irqRequest++;
         }
+        SETFL(id, PA7_INTF);
       }
     }
     else { // negative edge detection
-      if (pa7 == 0) {
-        SETFL(id, PA7_INTF);
+      if (pa7 == 0) { // PA7 = OFF
         if (FL(id, PA7_IRQ) != 0 && FL(id, PA7_INTF) == 0) {
           if (irqRequest) riot[id].irqColl++;
           irqRequest++;
         }
+        SETFL(id, PA7_INTF);
       }
     }
     riot[id].lastPA7 = pa7;
   }
 }
-
-// called by Arduino HW timer ISR
-//void onDueTimerIrq(int riot_id) {
-//  SETFL(riot_id, TMR_INTF);
-//  riot[riot_id].zeroTime = 0xff;
-//  if (FL(riot_id, TMR_IRQ) != 0) {
-//    if (!riot[riot_id].irqSent) {
-//      if (irqRequest) riot[riot_id].irqColl++;
-//      irqRequest++; // emu6502.h
-//      riot[riot_id].irqSent = true;
-//      riot[riot_id].irqCount++;
-//    }
-//  }   
-//}
 
 // to call after a DUE-timer irq call -
 // updates corresponding RIOT's timer state after DUE's timer event.
@@ -341,20 +290,21 @@ void checkPA7Signal(byte id) {
 // bit 1 set = DUE's TC4 timer irq = RIOT #1 timer event
 // bit 2 set = DUE's TC5 timer irq = RIOT #2 timer event
 void onDueTimerIrq() {
-  byte rid; // RIOT id
+  byte id; // RIOT id
   
-  for (rid=0; rid<3; rid++) {
-    if ((dueTimerIrq & (((byte)1)<<rid)) != 0) {
-      SETFL(rid, TMR_INTF);
-      riot[rid].zeroTime = 0xff;
-      if (FL(rid, TMR_IRQ) != 0) {
-        if (!riot[rid].irqSent) {
-          if (irqRequest) riot[rid].irqColl++; // 6502 IRQ collision!
+  for (id=0; id<3; id++) {
+    if ((dueTimerIrq & tmrBit[id]) != 0) {
+      SETFL(id, TMR_INTF);
+      riot[id].zeroTime = 0xff;
+      if (FL(id, TMR_IRQ) != 0) {
+        if (!riot[id].irqSent) {
+          if (irqRequest > 0) riot[id].irqColl++; // 6502 IRQ collision!
           irqRequest++; // emu6502.h
-          riot[rid].irqSent = true;
-          riot[rid].irqCount++;
+          riot[id].irqSent = true;
+          riot[id].irqCount++;
         }
       }
+      dueTimerIrq &= ((byte)~tmrBit[id]);
     }   
   }
 }
@@ -377,8 +327,26 @@ word getRiotTimerWrites(byte n) {
   return i;
 }
 
-word getRiotPioWrites(byte n) {
-  word i = riot[n].pioWrts;
-  riot[n].pioWrts = 0;
+word getRiotPioReadsA(byte n) {
+  word i = riot[n].pioRdsA;
+  riot[n].pioRdsA = 0;
+  return i;
+}
+
+word getRiotPioWritesA(byte n) {
+  word i = riot[n].pioWrtsA;
+  riot[n].pioWrtsA = 0;
+  return i;
+}
+
+word getRiotPioReadsB(byte n) {
+  word i = riot[n].pioRdsB;
+  riot[n].pioRdsB = 0;
+  return i;
+}
+
+word getRiotPioWritesB(byte n) {
+  word i = riot[n].pioWrtsB;
+  riot[n].pioWrtsB = 0;
   return i;
 }

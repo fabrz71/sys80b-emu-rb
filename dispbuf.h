@@ -106,7 +106,7 @@ void exeControlCode(byte cc) {
       display2[digitCount] = 0;
       d1i = 0;
       d2i = 0;
-      Serial.println(digitCount);
+      if (DEBUGOUTP) Serial.println(digitCount);
       return;
     }
     if (cc >= 0xc0 && cc <= 0xd3) { // cursor position

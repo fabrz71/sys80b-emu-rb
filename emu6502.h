@@ -19,7 +19,7 @@
 #define _IRQ_ENABLED
 #define _MULTIPLE_IRQREQ
 //#define _NMI_ENABLED
-//#define _MULTIPLE_NMIREQ
+#define _MULTIPLE_NMIREQ
 //#define _IRQNMI_OUTPUT
 #define STREAM_MEM 64 // number of last-executed istructions to keep track of
 
@@ -74,6 +74,8 @@ PROGMEM const byte clkTicks[256] =
 #define ISSET(b) ((P & (b)) > 0)
 
 // macros without return value
+#define reqIrq() irqRequest++
+#define reqNmi() nmiRequest++
 #define WRITE(w,b) mwrite(w,b)
 #define WRITE_ZP(w,b) mwrite(w,b)
 #define SET(b) P |= b
@@ -241,9 +243,7 @@ PROGMEM const byte clkTicks[256] =
 byte bcdADC(byte data);
 byte bcdSBC(byte data);
 void resetCPU();
-void reqIRQ();
 void irqStart();
-void reqNMI();
 void nmiStart();
 void printState();
 void printStack();
@@ -1096,20 +1096,22 @@ long execBatch(long clkCount) {
 
     #ifdef _IRQ_ENABLED
       // IRQ request detection
+      noInterrupts();
       if (irqRequest > 0 && !ISSET(I)) {
         irqCount++;
         irqStart();
-        //irqRequest = 0;
         #ifdef _MULTIPLE_IRQREQ
           irqRequest--;
         #else
           irqRequest = 0;
         #endif
       }
+      interrupts();
     #endif
   
     #ifdef _NMI_ENABLED
       // NMI request detection
+      noInterrupts();
        if (nmiRequest > 0 && !ISSET(I)) {
          nmiCount++;
          nmiStart();
@@ -1120,6 +1122,7 @@ long execBatch(long clkCount) {
            nmiRequest = 0;
          #endif
        }
+       interrupts();
     #endif
 
     if (dueTimerIrq != 0) onDueTimerIrq();
@@ -1143,19 +1146,14 @@ void resetCPU() {
   S = 0xfd;
   PC = FETCHW(RST_VECTOR);
   irqRequest = 0;
+  nmiRequest = 0;
   digitalWrite(IRQ_PIN, LOW);
   digitalWrite(NMI_PIN, LOW);
-  nmiRequest = 0;
   stopExecution = false;
-}
-
-void reqIRQ() {
-  irqRequest++;
 }
 
 // assumes I flag is 0 !
 void irqStart() {
-  //Serial.println(F("**IRQ**"));
 #ifdef _IRQNMI_OTPUT 
   digitalWrite(IRQ_PIN, HIGH);
 #endif
@@ -1166,12 +1164,7 @@ void irqStart() {
   PC = FETCHW(IRQ_VECTOR);
 }
 
-void reqNMI() {
-  nmiRequest++;
-}
-
 void nmiStart() {
-  //Serial.println(F("**NMI**"));
 #ifdef _IRQNMI_OTPUT 
   digitalWrite(NMI_PIN, HIGH);
 #endif  

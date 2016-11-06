@@ -25,7 +25,7 @@ PROGMEM const uint16_t mux16[16] =
     0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x8000 };
 
 // 8 bit demux output
-PROGMEM const byte demux[256] = 
+PROGMEM const byte toStrobeNum[] = 
   { 0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
     6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
     7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
@@ -39,7 +39,7 @@ extern const byte GPIO_SS_PIN;
 extern const byte IOEN_PIN;
 
 // "Operator adjustables" switches setting
-byte opSwtch[] = { 0b00000011, 0b00000111, 0b00000001, 0b11000010 };
+byte opSwtch[] = { 0, 0b00000011, 0b00000111, 0b00000001, 0b11000010 }; // first value not used
 
 // System I/O signals
 byte strobesN; // outputs
@@ -51,21 +51,26 @@ byte lampCtrl; // outputs
 uint16_t lampStrobes; // outputs
 //byte displayData; // outputs: D0-D7 display data bus
 volatile bool slamSw; // input
-volatile word outpCount[5] = {0, 0, 0, 0, 0};
 
 // System interface logic vars
 byte displayLatch; // display D0-D7 data latch
 byte displayId, prevDid = 0; // 0: not enabled; 1: display1; 2: display2; 3: both displays
 byte displayResetN;
 byte lampGroup;
+byte prevStrobeNum;
+byte sound16_L4; // "special" lamp used as 5th sound bit
 byte switchEnable, prevSwEnable;
 byte switchSel;
 uint16_t prevSol; // previous value of solenoids
 byte prevSnd; // previous value of sound
-byte returnsCache[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // first value unused
+byte returnsCache[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value not used
+byte forcedReturn[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value non used
+uint32_t slamIntCount = 0;
+volatile word outpCount[5] = {0, 0, 0, 0, 0}; // output changes count (stats)
 
 extern void setRiotInputs(byte id, byte port, byte data); // riots.h
 extern void debugLedsOutput(byte val);
+
 void initInterface();
 void testInterface();
 void initGPIO();
@@ -84,11 +89,15 @@ void initInterface() {
   //pinMode(12, OUTPUT); // patch for display outputs!
   pinMode(14, OUTPUT); // patch for display outputs!
   pinMode(15, OUTPUT); // patch for display outputs!
+  strobesN = 0xff; // outputs
+  returnsN = 0xff; // inputs
   initGPIO();
   debugLedsOutput(5);
   readSysReturns();
   debugLedsOutput(6);
-  initLedGrid(LG_CS_PIN, LG_LOAD_PIN);
+  //initLedGrid(LG_CS_PIN, LG_LOAD_PIN);
+  initLedGrid(LG_CS_PIN);
+  ledGridEnabled = true;
   attachInterrupt(SLAM_PIN, onSlamChanged, CHANGE);
 }
 
@@ -123,6 +132,11 @@ void testInterface() {
     w <<= 1;
     delay(100);
   }
+  // LED GRID outputs
+  for (i=0; i<255; i++) {
+    setLedRow(i%8, i);
+    delay(100);
+  }
 }
 
 // MCP23S17 GPIO ports setup
@@ -139,7 +153,7 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
   switch (riotId) {
     case 0: // RIOT 1: switch matrix
       if (portChanged == RIOTPORT_B) { // port B changed
-        strobesN = ~portB & 0xff; // Z11, Z12 outputs
+        strobesN = (byte)~portB & 0xff; // Z11, Z12 outputs
         dispatchOutputData(STROBES);
       }
       break;
@@ -150,20 +164,21 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
         if (portA & 0b00100000) // PA5 = 1 : latch high nybble (Z20) enabled
           displayLatch = (displayLatch & 0x0f) | ((portB & 0x0f) << 4);
       }
-      else { // port B: display half-byte (4 bits), LD (2 bits), display reset, switch enable
+      else { // port B: display half-byte (4 bits), LD (2 bits), display+sound reset, switch enable
         displayId = (1 - bitRead(portB, 4)) + 2*(1 - bitRead(portB, 5));
         displayResetN = 1 - bitRead(portB, 6);
         dispatchOutputData(DISPL);
         switchEnable = 1 - bitRead(portB, 7);
         if (switchEnable != prevSwEnable) { // changed
-          //updateRIOTsInput();
+          Serial.print("Switch enable signal: ");
+          Serial.println(switchEnable);
           readSysReturns();
           prevSwEnable = switchEnable;
         }
       }
       break;
-    case 2: // RIOT 3: solenoids & sound
-      if (portChanged == RIOTPORT_A) { // port A changed
+    case 2: // RIOT 3: solenoids, lamps & sound
+      if (portChanged == RIOTPORT_A) { // port A changed: solenoids & sound
         solenoids = 0;
         if (bitRead(portA, 5) == 0) // low nybble (Z28, Z29)
           solenoids = mux16[~portA & 0x03]; 
@@ -175,13 +190,15 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
         if (bitRead(portA, 7) == 0) solenoids |= 0x0100;
         //solenoid9 = (bitRead(portA, 7) == 0) ? false : true;
         dispatchOutputData(SOLENOIDS);
-        sound = bitRead(portA, 4) ? 0 : ~portA & 0x0f;
+        //sound = bitRead(portA, 4) ? 0 : ~portA & 0x0f;
+        sound = (portA & 0x10 == 0) ? (byte)~portA & 0x0f : 0;
         dispatchOutputData(SOUND);
       }
-      else { // port B: lamps control
-        lampCtrl = portB & 0x0f;
+      else { // port B: lamps controlif (strobeNum != prevStrobeNum)
+        lampCtrl = portB & 0x0f; // lamps strobe
         lampGroup = (portB >> 4) & 0x0f;
         lampStrobes = (mux16[lampGroup] & 0x1fff ) >> 1;
+        if (lampGroup == 1) sound16_L4 = lampCtrl & 1; // sound16 = lamp 4
         switchSel = lampGroup & 0x03;
         dispatchOutputData(LAMPS);
       }
@@ -207,16 +224,19 @@ void dispatchOutputData(byte type) {
       // solenoid 9 has changed ?
       if (ctrlw & 0x0100) mcpWritePB(0, sound | ((solenoids & 0x0100)>>4));
       prevSol = solenoids;
-      if (ctrlw) {
+      if (ctrlw > 0 && solenoids > 0) {
         Serial.print(F("Solenoids: "));
         Serial.println(solenoids, BIN);
       }
       break;
     case SOUND:
       mcpWritePB(0, sound | ((solenoids & 0x0100)>>4));
-      if (prevSnd ^ sound) {
+      if (prevSnd != sound && (sound | (sound16_L4<<3)) > 0) {
         Serial.print(F("Sound: "));
-        Serial.println(sound);
+        Serial.print(sound | (sound16_L4<<3));
+        Serial.print(F(" (L4:"));
+        Serial.print(sound16_L4);
+        Serial.println(")");
       }
       prevSnd = sound;
       break;
@@ -239,16 +259,35 @@ void dispatchOutputData(byte type) {
   outpCount[type]++;
 }
 
-// read only system (DUE's) returns and updates returnsN and RIOT-0 inputs
+// read only system (DUE's) returns and updates returnsN and RIOT-0 inputs.
+// called before every RIOT #0 port read
 void readSysReturns() {
   byte portInput;
-  byte strobeNum = demux[~strobesN];
+  byte strobeNum; // 1..8 (0 = no strobes)
 
-  returnsN = (byte)(((RETURNS_PORT->PIO_PDSR & RETURNS_bitmask) >> RETURNS_LSB_POS) & 0xff);
-  if (switchEnable == 0) portInput = ~returnsN; // normal mode
-  else portInput = opSwtch[switchSel]; // "operator adjustables" read mode
-  returnsCache[strobeNum] = portInput;
+  if (switchEnable) { // "operator adjustables" reading mode
+    strobeNum = switchSel+1;
+    returnsN = (byte)~opSwtch[strobeNum]; // "operator adjustables" reading mode
+  }
+  else { // normal switch reading
+    strobeNum = toStrobeNum[(byte)~strobesN];
+    if (strobeNum != prevStrobeNum) return;
+    if (forcedReturn[strobeNum]) returnsN = (byte)~forcedReturn[strobeNum];
+    else returnsN = (byte)(((RETURNS_PORT->PIO_PDSR & RETURNS_bitmask) >> RETURNS_LSB_POS) & 0xff);
+  }
+  portInput = (byte)~returnsN;
+  if (returnsCache[strobeNum] != portInput) {
+    Serial.print("strobe: ");
+    //Serial.print((byte)~strobesN);
+    //Serial.print("->");
+    Serial.print(strobeNum);
+    Serial.print(": ");
+    Serial.print(portInput);
+    if (switchEnable) Serial.println(" (opSwitches)"); else Serial.println("");
+    returnsCache[strobeNum] = portInput;
+  }
   setRiotInputs(0, RIOTPORT_A, portInput); // returns
+  prevStrobeNum = strobeNum;
   if (strobeNum) setLedRow(strobeNum-1, portInput);
 }
 
@@ -261,46 +300,49 @@ void readSysInputs() {
 }
 */
 
+/*
 // update RIOTs' input ports upon input signals change
 // ( called by readSysInput() )
 void updateRIOTsInput() {  
   byte portInput;
-  byte strobeNum = demux[~strobesN];
+  byte strobeNum = toStrobeNum[(byte)~strobesN];
   
-  if (switchEnable == 0) portInput = ~returnsN; // normal mode
+  if (switchEnable == 0) portInput = (byte)~returnsN; // normal mode
   else portInput = opSwtch[switchSel]; // "operator adjustables" read mode
-  /*
-  else { // normal mode: detects changes
-    byte retChange;
-    portInput = ~returnsN;
-    if (strobeNum > 0) {
-      retChange = returnsCache[strobeNum] ^ portInput;
-      if (retChange) { // returns on strobe line changed
-        Serial.print(F("Matrix S"));
-        Serial.print(strobeNum);
-        Serial.print(": ");
-        for (int i=0; i<8; i++) {
-          if (retChange && bit(i)) {
-            Serial.print("R");
-            Serial.print(i);
-            Serial.print("=");
-            Serial.print((portInput && bit(i)) ? 1 : 0);
-            Serial.print(" ");
-          }
-        }
-        Serial.println("");
-      }
-    }
-  }
-  */
+
+//  else { // normal mode: detects changes
+//    byte retChange;
+//    portInput = ~returnsN;
+//    if (strobeNum > 0) {
+//      retChange = returnsCache[strobeNum] ^ portInput;
+//      if (retChange) { // returns on strobe line changed
+//        Serial.print(F("Matrix S"));
+//        Serial.print(strobeNum);
+//        Serial.print(": ");
+//        for (int i=0; i<8; i++) {
+//          if (retChange && bit(i)) {
+//            Serial.print("R");
+//            Serial.print(i);
+//            Serial.print("=");
+//            Serial.print((portInput && bit(i)) ? 1 : 0);
+//            Serial.print(" ");
+//          }
+//        }
+//        Serial.println("");
+//      }
+//    }
+//  }
+
   returnsCache[strobeNum] = portInput;
   setRiotInputs(0, RIOTPORT_A, portInput); // returns
   setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // slam switch  
 }
+*/
 
 // ISR
 void onSlamChanged() {
-  slamSw = (digitalRead(SLAM_PIN) == HIGH) ? false : true;
+  if(slamIntCount++ == 0) return; // ignore f\\irst occurrence
+  slamSw = (digitalRead(SLAM_PIN) == LOW);
   setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // may yield 6502 IRQ
 }
 

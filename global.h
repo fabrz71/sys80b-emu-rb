@@ -23,7 +23,7 @@ const byte LCD_D7_PIN = 7;
 const byte LCD_RS_PIN = 23;
 const byte LCD_EN_PIN = 24;
 
-const byte SPI_CLK_DIV = 12;
+//const byte SPI_CLK_DIV = 12;
 
 PROGMEM const char *inpName[] = { "RETURNS" , "SLAM SWITCH" };
 PROGMEM const char *outpName[] = { "STROBES", "SOLENOIDS", "SOUND", "LAMPS", "DISPLAY" };
