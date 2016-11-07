@@ -11,9 +11,9 @@
 // timer interrupt enable
 #define TMR_IRQ  8 // 0: disabled; 1: enabled
 // interrupt flag from PA7 edge detecion
-#define PA7_INTF 64 // (state output)
+#define PA7_INTF 64 // (state output) causes IRQ when PA7_IRQ enabled
 // interrupt flag from timer
-#define TMR_INTF 128 // (state output)
+#define TMR_INTF 128 // (state output) causes IRQ when TMR_IRQ enabled
 
 #define CLEARFLAG(r,f) r->flags &= (byte)~((byte)(f))
 #define SETFLAG(r,f) r->flags |= (byte)(f)
