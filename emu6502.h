@@ -17,11 +17,9 @@
 
 //#define _LOCK_DETECTION
 #define _IRQ_ENABLED
-#define _MULTIPLE_IRQREQ
 //#define _NMI_ENABLED
-#define _MULTIPLE_NMIREQ
-//#define _IRQNMI_OUTPUT
-#define STREAM_MEM 64 // number of last-executed istructions to keep track of
+//#define _IRQNMI_OUTPUT // led output
+#define PC_STREAM_MEM 64 // number of last-executed istructions to keep track of
 
 // CPU registers
 byte A, X, Y; // 8-bit regs
@@ -36,21 +34,21 @@ byte ABH, ABL; // address but high/low bytes
 uint16_t AB; // 16-bit adress bus
 uint16_t iADR; // istruction adress
 boolean stopExecution = false;
-uint16_t lastiadr[STREAM_MEM + 1];
+uint16_t lastiadr[PC_STREAM_MEM + 1];
 int iadri = 0;
 byte carry; // carry (ADC, SBC)
 uint16_t oldSP; // old Stack Pointer
 byte illegal = 0;
-volatile int irqRequest;
-volatile int nmiRequest;
+volatile byte irqRequest;
+volatile byte nmiRequest;
 unsigned irqCount = 0;
 unsigned nmiCount = 0;
 long iCount; // executed istructions count for each batch
 
 // external variables
 extern volatile byte dueTimerIrq; // dueTimers.h
-extern const byte IRQ_PIN;
-extern const byte NMI_PIN;
+extern const byte IRQ_PIN; // global.h
+extern const byte NMI_PIN; // global.h
 
 PROGMEM const byte clkTicks[256] =
 { 7, 6, 2, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6, 2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 5, 5, 7, 7,
@@ -475,7 +473,7 @@ long execBatch(long clkCount) {
         POP; ABL = data;
         POP; ABH = data;
         PC = WORD(ABL, ABH);
-      #ifdef _IRQNMI_OTPUT 
+      #ifdef _IRQNMI_OUTPUT 
         digitalWrite(IRQ_PIN, LOW);
         digitalWrite(NMI_PIN, LOW);
       #endif
@@ -1077,7 +1075,7 @@ long execBatch(long clkCount) {
 
     // execution stream memory
     lastiadr[iadri++] = iADR;
-    if (iadri >= STREAM_MEM) iadri = 0;
+    if (iadri >= PC_STREAM_MEM) iadri = 0;
 
     #ifdef _LOCK_DECECTION
       // lock detection
@@ -1100,11 +1098,7 @@ long execBatch(long clkCount) {
       if (irqRequest > 0 && !ISSET(I)) {
         irqCount++;
         irqStart();
-        #ifdef _MULTIPLE_IRQREQ
-          irqRequest--;
-        #else
-          irqRequest = 0;
-        #endif
+        //irqRequest = 0; // *NO!*
       }
       interrupts();
     #endif
@@ -1112,17 +1106,12 @@ long execBatch(long clkCount) {
     #ifdef _NMI_ENABLED
       // NMI request detection
       noInterrupts();
-       if (nmiRequest > 0 && !ISSET(I)) {
-         nmiCount++;
-         nmiStart();
-         //nmiRequest = 0;
-         #ifdef _MULTIPLE_NMIREQ
-           nmiRequest--;
-         #else
-           nmiRequest = 0;
-         #endif
-       }
-       interrupts();
+      if (nmiRequest > 0 && !ISSET(I)) {
+        nmiCount++;
+        nmiStart();
+        nmiRequest = 0;
+      }
+      interrupts();
     #endif
 
     if (dueTimerIrq != 0) onDueTimerIrq();
@@ -1130,7 +1119,7 @@ long execBatch(long clkCount) {
   } while (tCount < clkCount);
 
   if (stopExecution) {
-    Serial.println(F("Execution terminated on error!"));
+    Serial.println(F("Execution stopped!"));
     printState();
     dumpHistory();
   }
@@ -1154,7 +1143,7 @@ void resetCPU() {
 
 // assumes I flag is 0 !
 void irqStart() {
-#ifdef _IRQNMI_OTPUT 
+#ifdef _IRQNMI_OUTPUT 
   digitalWrite(IRQ_PIN, HIGH);
 #endif
   CLEAR(B);
@@ -1165,7 +1154,7 @@ void irqStart() {
 }
 
 void nmiStart() {
-#ifdef _IRQNMI_OTPUT 
+#ifdef _IRQNMI_OUTPUT 
   digitalWrite(NMI_PIN, HIGH);
 #endif  
   CLEAR(B);
@@ -1261,10 +1250,10 @@ void printStack() {
 void dumpHistory() {
   int p, i;
 
-  p = (iCount <= STREAM_MEM) ? 0 : iadri;
-  for (i = 0; i < STREAM_MEM; i++) {
+  p = (iCount <= PC_STREAM_MEM) ? 0 : iadri;
+  for (i = 0; i < PC_STREAM_MEM; i++) {
     dasm(lastiadr[p++]);
-    if (p >= STREAM_MEM) p = 0;
+    if (p >= PC_STREAM_MEM) p = 0;
   }
   dasm(iADR);
 }
