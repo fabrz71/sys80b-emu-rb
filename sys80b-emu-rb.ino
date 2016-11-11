@@ -29,7 +29,7 @@
 
 LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
 
-int irqCalls = 0;
+//int irqCalls = 0;
 bool ramMod = false;
 int ramWrites = 0;
 int slamSwPushed = false;
@@ -128,8 +128,10 @@ void loop() {
   
   startT = millis();
   if (!stopExecution) {
-    irqCalls = irqCount;
-    
+    //irqCalls = irqCount;
+    irqCount = 0;
+    irqCalls = 0;
+     
     // CPU emulation cycle
     while (millis() - startT < INFO_DELAY) {
       iCount += execBatch(BATCH_CLK_COUNT);
@@ -169,7 +171,8 @@ void loop() {
     Serial.print(F(" istructions - "));
     Serial.print(cCount);
     Serial.print(F(" clock ticks (about) - "));
-    Serial.print(irqCount - irqCalls);
+    //Serial.print(irqCount - irqCalls);
+    Serial.print(irqCount);
     Serial.print(F(" IRQ - adr: $"));
     Serial.println(iADR, HEX);
 /*
@@ -249,8 +252,8 @@ void loop() {
     prevAdr = iADR;
 
     // escape key
-    for (i=0; i<8; i++) forcedReturn[i] = 0;
-    if (Serial.available() > 0) {
+    if (SERIALINP && Serial.available() > 0) {
+      for (i=0; i<8; i++) forcedReturn[i] = 0; // resets forced returns
       //Serial.println(F(">Serial input detected..."));
       cmd = Serial.readString();
       if (cmd.equals("\\")) { // STOPS EXECUTION

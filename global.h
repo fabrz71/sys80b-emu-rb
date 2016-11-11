@@ -23,6 +23,9 @@ const byte LCD_D7_PIN = 7;
 const byte LCD_RS_PIN = 23;
 const byte LCD_EN_PIN = 24;
 
+const bool SERIALOUT true
+const bool SERIALINP true
+
 //const byte SPI_CLK_DIV = 12;
 
 PROGMEM const char *inpName[] = { "RETURNS" , "SLAM SWITCH" };
@@ -35,9 +38,10 @@ enum outputType { STROBES, SOLENOIDS, SOUND, LAMPS, DISPL };
 void infiniteLoop();
 
 void infiniteLoop() {
-  boolean led = false;
+  bool led = false;
   while (true) {
-    digitalWrite(LED_PIN, led = !led);
+    led = !led;
+    digitalWrite(LED_PIN, led ? HIGH : LOW);
     delay(200);
   }
 }

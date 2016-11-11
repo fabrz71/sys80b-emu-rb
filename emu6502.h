@@ -30,20 +30,23 @@ byte IR; // 8-bit Istruction Register
 
 // utility variables
 byte data; // computation byte
-byte ABH, ABL; // address but high/low bytes
+byte ABH, ABL; // address bus high/low bytes
 uint16_t AB; // 16-bit adress bus
 uint16_t iADR; // istruction adress
 boolean stopExecution = false;
 uint16_t lastiadr[PC_STREAM_MEM + 1];
-int iadri = 0;
+uint16_t iadri = 0;
 byte carry; // carry (ADC, SBC)
 uint16_t oldSP; // old Stack Pointer
-byte illegal = 0;
+byte illegalOp = 0;
 volatile byte irqRequest;
 volatile byte nmiRequest;
-unsigned irqCount = 0;
-unsigned nmiCount = 0;
-long iCount; // executed istructions count for each batch
+volatile byte prevNmiReq; // previous nmiRequest
+volatile byte nestedInterrupts;
+bool nmiRunning; // used for NMI priority over IRQ
+uint16_t irqCount = 0;
+uint16_t nmiCount = 0;
+uint32_t iCount; // executed istructions count for each batch
 
 // external variables
 extern volatile byte dueTimerIrq; // dueTimers.h
@@ -264,7 +267,7 @@ long execBatch(long clkCount) {
 
   iCount = 0;
   if (stopExecution) return iCount;
-  
+
   do {
     IR = FETCH(PC);
     prevPC = PC;
@@ -274,11 +277,12 @@ long execBatch(long clkCount) {
     switch (IR) { // istruction dispatch
 
       case 0x00: // BRK : software interrupt
+        Start();
         SET(B);
-        PUSHW(PC + 1);
-        PUSH(P);
-        SET(I);
-        PC = FETCHW(IRQ_VECTOR);
+//        PUSHW(PC + 1);
+//        PUSH(P);
+//        SET(I);
+//        PC = FETCHW(IRQ_VECTOR);
         break;
 
       case 0x01: // ORA (zerop,X) : A <- A OR [(zerop + X)]
@@ -473,10 +477,12 @@ long execBatch(long clkCount) {
         POP; ABL = data;
         POP; ABH = data;
         PC = WORD(ABL, ABH);
-      #ifdef _IRQNMI_OUTPUT 
-        digitalWrite(IRQ_PIN, LOW);
-        digitalWrite(NMI_PIN, LOW);
-      #endif
+        #ifdef _IRQNMI_OUTPUT
+          if (nmiRunning) digitalWrite(NMI_PIN, LOW);
+          else digitalWrite(IRQ_PIN, LOW);
+        #endif
+        nmiRunning = false;
+        nestedInterrupts--;
         break;
 
       case 0x41: // EOR (zp,X) : A <- A EOR [(zp + X)]
@@ -1061,15 +1067,15 @@ long execBatch(long clkCount) {
         break;
 
       default:
-        illegal = 1;
-        Serial.print(F("ERROR: stop on illegal 6502 OpCode 0x"));
+        illegalOp = 1;
+        Serial.print(F("ERROR: stop on illegalOp 6502 OpCode 0x"));
         Serial.print(IR, HEX);
         Serial.print(" @ $");
         Serial.println(iADR, HEX);
         stopExecution = true;
         break;
     }
-    
+
     iCount++; // istructions count
     tCount += clkTicks[IR]; // clock ticks count
 
@@ -1084,7 +1090,7 @@ long execBatch(long clkCount) {
         printState();
         Serial.print(F("Warning: stop on trap @ $"));
         Serial.println(iADR, HEX);
-        illegal = 2; 
+        illegalOp = 2;
         stopExecution = true;
         break;
       }
@@ -1092,30 +1098,23 @@ long execBatch(long clkCount) {
 
     prevPC = PC;
 
-    #ifdef _IRQ_ENABLED
-      // IRQ request detection
-      noInterrupts();
-      if (irqRequest > 0 && !ISSET(I)) {
-        irqCount++;
-        irqStart();
-        //irqRequest = 0; // *NO!*
-      }
-      interrupts();
-    #endif
-  
     #ifdef _NMI_ENABLED
       // NMI request detection
       noInterrupts();
-      if (nmiRequest > 0 && !ISSET(I)) {
-        nmiCount++;
-        nmiStart();
-        nmiRequest = 0;
-      }
+      if (nmiRequest != prevNmiReq) nmiCount++; // edge triggered
+      prevNmiReq = nmiRequest;
+      interrupts();
+    #endif
+
+    #ifdef _IRQ_ENABLED
+      // IRQ request detection
+      noInterrupts();
+      if (irqRequest != 0 && !ISSET(I) && !nmiRunning) irqStart(); // level triggered
       interrupts();
     #endif
 
     if (dueTimerIrq != 0) onDueTimerIrq();
-  
+
   } while (tCount < clkCount);
 
   if (stopExecution) {
@@ -1123,7 +1122,7 @@ long execBatch(long clkCount) {
     printState();
     dumpHistory();
   }
-  
+
   return iCount;
 }
 
@@ -1136,32 +1135,41 @@ void resetCPU() {
   PC = FETCHW(RST_VECTOR);
   irqRequest = 0;
   nmiRequest = 0;
-  digitalWrite(IRQ_PIN, LOW);
-  digitalWrite(NMI_PIN, LOW);
+  nestedInterrupts = 0;
+  #ifdef _IRQNMI_OUTPUT
+    digitalWrite(IRQ_PIN, LOW);
+    digitalWrite(NMI_PIN, LOW);
+  #endif
   stopExecution = false;
+  nmiRunning = false;
 }
 
 // assumes I flag is 0 !
 void irqStart() {
-#ifdef _IRQNMI_OUTPUT 
-  digitalWrite(IRQ_PIN, HIGH);
-#endif
+  #ifdef _IRQNMI_OUTPUT
+    digitalWrite(IRQ_PIN, HIGH);
+  #endif
   CLEAR(B);
   PUSHW(PC); // PC already incremented
   PUSH(P);
   SET(I);
   PC = FETCHW(IRQ_VECTOR);
+  irqCount++;
+  nestedInterrupts++;
 }
 
 void nmiStart() {
-#ifdef _IRQNMI_OUTPUT 
-  digitalWrite(NMI_PIN, HIGH);
-#endif  
+  #ifdef _IRQNMI_OUTPUT
+    digitalWrite(NMI_PIN, HIGH);
+  #endif
   CLEAR(B);
   PUSHW(PC); // PC altready incremented
   PUSH(P);
   SET(I);
   PC = FETCHW(NMI_VECTOR);
+  nmiCount++;
+  nestedInterrupts++;
+  nmiRunning = true;
 }
 
 byte bcdADC(byte d) {

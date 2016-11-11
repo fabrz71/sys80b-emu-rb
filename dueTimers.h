@@ -9,7 +9,7 @@ const byte tmrBit[] = { 0b001, 0b010, 0b100 };
 
 uint32_t rc;
 uint32_t shortTimerDelayCount[3]; // (stats)
-volatile bool tmrSet[3]; // timer has started
+bool tmrSet[3]; // timer has started
 
 void initTimers();
 void startTimer(uint32_t us, uint32_t ch);

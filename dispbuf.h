@@ -1,6 +1,6 @@
 // display buffer
 
-#define DEBUGOUTP false
+#define DISP_DBGOUT false
 #define MAX_DIGIT_COUNT 20 // number of alhpanumeric chars for each line
 
 enum alt_mode { NORMAL, BLANK, REVERSE };
@@ -50,7 +50,7 @@ void clearDisplayBuffers() {
 void pulseLD(byte ld, byte dd) {
   char ch;
   
-  if (DEBUGOUTP) {
+  if (DISP_DBGOUT) {
     Serial.print(F("pulseLD("));
     Serial.print(ld);
     Serial.print(";");
@@ -92,21 +92,21 @@ void exeControlCode(byte cc) {
     controlDataMode = false;
     if (cc >= 0x40 && cc <= 0x7f) { // brightness
       brightness = cc & 0x3f; // (0-63)
-      if (DEBUGOUTP) {
+      if (DISP_DBGOUT) {
         Serial.print(F("B:"));
         Serial.println(brightness);
       }
       return;
     }
     if (cc >= 0x80 && cc <= 0x9f) { // number of digits
-      if (DEBUGOUTP) Serial.print(F("D:"));
+      if (DISP_DBGOUT) Serial.print(F("D:"));
       if (cc == 0x80) cc = 0xa0;
       digitCount = cc - 0x80;
       display1[digitCount] = 0;
       display2[digitCount] = 0;
       d1i = 0;
       d2i = 0;
-      if (DEBUGOUTP) Serial.println(digitCount);
+      if (DISP_DBGOUT) Serial.println(digitCount);
       return;
     }
     if (cc >= 0xc0 && cc <= 0xd3) { // cursor position
@@ -139,7 +139,7 @@ void exeControlCode(byte cc) {
       return;
     }
     if (cc >= 0x05 && cc <= 0x07) { // digit time
-      if (DEBUGOUTP) {
+      if (DISP_DBGOUT) {
         Serial.print(F("DT:"));
         if (cc == 5) Serial.println(16);
         else if (cc == 6) Serial.println(32);
@@ -158,7 +158,7 @@ void exeControlCode(byte cc) {
       }
       return;
     }
-    if (DEBUGOUTP) {
+    if (DISP_DBGOUT) {
       Serial.print(F("W0:"));
       Serial.println(cc, HEX);
     }

@@ -10,6 +10,8 @@
 #define RETURNS_LSB_POS 1
 #define STROBES_LSB_POS 12
 
+#define IO_STREAM_MEM 100
+
 // messages output by I/O type
 //const bool inMsgEn[] = { false, false };
 //const bool outMsgEn[] = { false, false, true, false, false };
@@ -25,16 +27,16 @@ PROGMEM const uint16_t mux16[16] =
     0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x8000 };
 
 // 8 bit demux output
-PROGMEM const byte toStrobeNum[] = 
+PROGMEM const byte toStrobeNum[] =
   { 0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
     7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
     7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
     8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
     8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
     8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
     8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8 };
-  
+
 extern const byte GPIO_SS_PIN;
 extern const byte IOEN_PIN;
 
@@ -63,10 +65,12 @@ byte switchEnable, prevSwEnable;
 byte switchSel;
 uint16_t prevSol; // previous value of solenoids
 byte prevSnd; // previous value of sound
-byte returnsCache[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value not used
-byte forcedReturn[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value non used
-uint32_t slamIntCount = 0;
-volatile word outpCount[5] = {0, 0, 0, 0, 0}; // output changes count (stats)
+
+// auxiliary/stats/debug vars
+byte returnsCache[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value 0 not used
+byte forcedReturn[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value 0 non used
+volatile uint32_t slamIntCount = 0;
+volatile uint16_t outpCount[5] = {0, 0, 0, 0, 0}; // output changes count (stats) - see outputType enum
 
 extern void setRiotInputs(byte id, byte port, byte data); // riots.h
 extern void debugLedsOutput(byte val);
@@ -80,7 +84,7 @@ void dispatchOutputData(byte type);
 void readSysReturns();
 //void readSysInputs();
 void onSlamChanged(); // ISR
-word getOutpCount(byte n);
+uint16_t getOutpCount(byte n);
 
 void initInterface() {
   RETURNS_PORT->PIO_ODR |= RETURNS_bitmask; // set port bits 1-8 as INPUT (Returns)
@@ -92,12 +96,11 @@ void initInterface() {
   strobesN = 0xff; // outputs
   returnsN = 0xff; // inputs
   initGPIO();
+  initLedGrid(LG_CS_PIN);
+  ledGridEnabled = true;
   debugLedsOutput(5);
   readSysReturns();
   debugLedsOutput(6);
-  //initLedGrid(LG_CS_PIN, LG_LOAD_PIN);
-  initLedGrid(LG_CS_PIN);
-  ledGridEnabled = true;
   attachInterrupt(SLAM_PIN, onSlamChanged, CHANGE);
 }
 
@@ -105,7 +108,7 @@ void testInterface() {
   int i;
   int p;
   uint16_t w;
-  
+
   // MCP23S17s GPIO outputs
   for (p=0; p<2; p++) {
     w = 1;
@@ -142,10 +145,8 @@ void testInterface() {
 // MCP23S17 GPIO ports setup
 void initGPIO() {
   MCP_init(GPIO_SS_PIN);
-  wordWrite(0, IODIRA, 0x0000); // all 16 pins set as output
-  wordWrite(1, IODIRA, 0x0000); // all 16 pins set as output
-  mcpWrite(0, 0); // resets MCP0 outputs
-  mcpWrite(1, 0); // resets MCP1 outputs
+  mcpWrite(0, 0x0f00); // resets MCP0 outputs
+  mcpWrite(1, 0x0000); // resets MCP1 outputs
 }
 
 // update system output signals variables upon RIOTs' output ports changes
@@ -181,11 +182,11 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
       if (portChanged == RIOTPORT_A) { // port A changed: solenoids & sound
         solenoids = 0;
         if (bitRead(portA, 5) == 0) // low nybble (Z28, Z29)
-          solenoids = mux16[~portA & 0x03]; 
+          solenoids = mux16[~portA & 0x03];
           //solenoids = 1 << ((~portA) & 0x03);
         if (bitRead(portA, 6) == 0) // high nybble (Z28, Z30)
           solenoids |= (mux16[((~portA & 0x0c) >> 2)] << 4);
-          //solenoids |= mux16[4 + ((~portA & 0x0c) >> 2)]; 
+          //solenoids |= mux16[4 + ((~portA & 0x0c) >> 2)];
           //solenoids = (solenoids & 0x0f) | (1 << (4+(((~portA) & 0x0c) >> 2)) );
         if (bitRead(portA, 7) == 0) solenoids |= 0x0100;
         //solenoid9 = (bitRead(portA, 7) == 0) ? false : true;
@@ -210,9 +211,9 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
 void dispatchOutputData(byte type) {
   uint16_t ctrlw;
   uint32_t ctrlww;
-  
+
   switch (type) {
-    case STROBES:    
+    case STROBES:
       ctrlww = ((uint32_t)strobesN) << STROBES_LSB_POS;
       STROBES_PORT -> PIO_SODR = ctrlww; // sets 1 bits
       STROBES_PORT -> PIO_CODR = ~ctrlww & STROBES_bitmask; // clears 0 bits
@@ -220,7 +221,7 @@ void dispatchOutputData(byte type) {
     case SOLENOIDS:
       ctrlw = prevSol ^ solenoids;
       // solenoids 1-8 have changed ?
-      if (ctrlw & 0x00ff) mcpWritePA(0, (byte)(solenoids & 0x00ff)); 
+      if (ctrlw & 0x00ff) mcpWritePA(0, (byte)(solenoids & 0x00ff));
       // solenoid 9 has changed ?
       if (ctrlw & 0x0100) mcpWritePB(0, sound | ((solenoids & 0x0100)>>4));
       prevSol = solenoids;
@@ -303,10 +304,10 @@ void readSysInputs() {
 /*
 // update RIOTs' input ports upon input signals change
 // ( called by readSysInput() )
-void updateRIOTsInput() {  
+void updateRIOTsInput() {
   byte portInput;
   byte strobeNum = toStrobeNum[(byte)~strobesN];
-  
+
   if (switchEnable == 0) portInput = (byte)~returnsN; // normal mode
   else portInput = opSwtch[switchSel]; // "operator adjustables" read mode
 
@@ -335,19 +336,19 @@ void updateRIOTsInput() {
 
   returnsCache[strobeNum] = portInput;
   setRiotInputs(0, RIOTPORT_A, portInput); // returns
-  setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // slam switch  
+  setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // slam switch
 }
 */
 
 // ISR
 void onSlamChanged() {
-  if(slamIntCount++ == 0) return; // ignore f\\irst occurrence
+  if(slamIntCount++ == 0) return; // ignore first occurrence
   slamSw = (digitalRead(SLAM_PIN) == LOW);
   setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // may yield 6502 IRQ
 }
 
-word getOutpCount(byte n) {
-  word c = outpCount[n];
+uint16_t getOutpCount(byte n) {
+  uint16_t c = outpCount[n];
   outpCount[n] = 0;
   return c;
 }
