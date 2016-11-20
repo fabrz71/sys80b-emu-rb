@@ -10,10 +10,10 @@
 
 #define SPI_CS_PORT PIOA // relative to pin 42
 #define SPI_CS_PPIN 19   // relative to pin 42
-//#define MCP_SPI_CS_OFF digitalWrite(ss_pin, LOW)
-//#define MCP_SPI_CS_ON digitalWrite(ss_pin, HIGH)
-#define MCP_SPI_CS_OFF  SPI.beginTransaction(mcpSpiSetup); SPI_CS_PORT->PIO_CODR = MCP_SPI_CS_bitmask
-#define MCP_SPI_CS_ON   SPI_CS_PORT->PIO_SODR = MCP_SPI_CS_bitmask; SPI.endTransaction()
+#define MCP_SPI_CS_OFF SPI.beginTransaction(mcpSpiSetup); digitalWrite(ss_pin, LOW)
+#define MCP_SPI_CS_ON digitalWrite(ss_pin, HIGH); SPI.endTransaction()
+//#define MCP_SPI_CS_OFF  SPI.beginTransaction(mcpSpiSetup); SPI_CS_PORT->PIO_CODR = MCP_SPI_CS_bitmask
+//#define MCP_SPI_CS_ON   SPI_CS_PORT->PIO_SODR = MCP_SPI_CS_bitmask; SPI.endTransaction()
 
 #define    IODIRA    (0x00)      // MCP23x17 I/O Direction Register
 #define    IPOLA     (0x02)      // MCP23x17 Input Polarity Register
@@ -42,8 +42,8 @@ void mcpWritePA(uint8_t adr, uint8_t value);
 void mcpWritePB(uint8_t adr, uint8_t value);
 
 void MCP_init(int pin) {
-  /*
   ss_pin = pin;
+  /*
   SPI.begin(ss_pin);
   SPI.setClockDivider(ss_pin, SPI_CLK_DIV);
   SPI.setBitOrder(ss_pin, MSBFIRST);

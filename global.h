@@ -23,8 +23,8 @@ const byte LCD_D7_PIN = 7;
 const byte LCD_RS_PIN = 23;
 const byte LCD_EN_PIN = 24;
 
-const bool SERIALOUT true
-const bool SERIALINP true
+const bool SERIALOUT = true;
+const bool SERIALINP = true;
 
 //const byte SPI_CLK_DIV = 12;
 

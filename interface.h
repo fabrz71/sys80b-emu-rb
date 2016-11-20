@@ -16,9 +16,8 @@
 //const bool inMsgEn[] = { false, false };
 //const bool outMsgEn[] = { false, false, true, false, false };
 
-const unsigned int RETURNS_bitmask = ((unsigned int)0x00ff) << RETURNS_LSB_POS;
-const unsigned int STROBES_bitmask = ((unsigned int)0x00ff) << STROBES_LSB_POS;
-//const unsigned int DISPLAY_bitmask = ((unsigned int)0x07ff) << DISPLAY_LSB_POS;
+const unsigned int RETURNS_bitmask = ((unsigned int)0xff) << RETURNS_LSB_POS;
+const unsigned int STROBES_bitmask = ((unsigned int)0xff) << STROBES_LSB_POS;
 const unsigned int DISPLAY_bitmask = 0x07ffu;
 
 // 16 bit mux outputs
@@ -60,7 +59,7 @@ byte displayId, prevDid = 0; // 0: not enabled; 1: display1; 2: display2; 3: bot
 byte displayResetN;
 byte lampGroup;
 byte prevStrobeNum;
-byte sound16_L4; // "special" lamp used as 5th sound bit
+byte sound16_L4; // "special" lamp used as 5th sound bit [0,1]
 byte switchEnable, prevSwEnable;
 byte switchSel;
 uint16_t prevSol; // previous value of solenoids
@@ -88,6 +87,7 @@ uint16_t getOutpCount(byte n);
 
 void initInterface() {
   RETURNS_PORT->PIO_ODR |= RETURNS_bitmask; // set port bits 1-8 as INPUT (Returns)
+  RETURNS_PORT->PIO_PUER |= RETURNS_bitmask; // enable port bits 1-8 internal PULL-UP R (Returns)
   STROBES_PORT->PIO_OER |= STROBES_bitmask; // set port bits 12-19 as OUTPUT (Strobes)
   DISPLAY_PORT->PIO_OER |= DISPLAY_bitmask; // set port bits 0-10 as OUTPUT (Display)
   //pinMode(12, OUTPUT); // patch for display outputs!
@@ -98,9 +98,9 @@ void initInterface() {
   initGPIO();
   initLedGrid(LG_CS_PIN);
   ledGridEnabled = true;
-  debugLedsOutput(5);
+  //debugLedsOutput(5);
   readSysReturns();
-  debugLedsOutput(6);
+  //debugLedsOutput(6);
   attachInterrupt(SLAM_PIN, onSlamChanged, CHANGE);
 }
 
@@ -111,34 +111,40 @@ void testInterface() {
 
   // MCP23S17s GPIO outputs
   for (p=0; p<2; p++) {
+    Serial.print("GPIO");
+    Serial.print(p);
+    Serial.println(" test...");
     w = 1;
     for (i=0; i<16; i++) {
       mcpWrite(p, w);
       w <<= 1;
-      delay(100);
+      delay(200);
     }
     mcpWrite(p, 0);
   }
   // DUE's display outputs
   w = 1;
+  Serial.println("Display signals...");
   for (i=0; i<12; i++) {
     DISPLAY_PORT->PIO_SODR = (uint32_t)w; // sets 1 bits
     DISPLAY_PORT->PIO_CODR = ~((uint32_t)w) & DISPLAY_bitmask; // clears 0 bits
     w <<= 1;
-    delay(100);
+    delay(200);
   }
   // DUE's strobes outputs
   w = 1;
+  Serial.println("Strobes...");
   for (i=0; i<8; i++) {
     STROBES_PORT->PIO_SODR = ((uint32_t)w) << STROBES_LSB_POS; // sets 1 bits
     STROBES_PORT->PIO_CODR = (((uint32_t)~w) << STROBES_LSB_POS) & STROBES_bitmask; // clears 0 bits
     w <<= 1;
-    delay(100);
+    delay(200);
   }
   // LED GRID outputs
+  Serial.println("LED grid...");
   for (i=0; i<255; i++) {
     setLedRow(i%8, i);
-    delay(100);
+    delay(20);
   }
 }
 
@@ -169,7 +175,8 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
         displayId = (1 - bitRead(portB, 4)) + 2*(1 - bitRead(portB, 5));
         displayResetN = 1 - bitRead(portB, 6);
         dispatchOutputData(DISPL);
-        switchEnable = 1 - bitRead(portB, 7);
+        //switchEnable = 1 - bitRead(portB, 7);
+        switchEnable = bitRead(portB, 7);
         if (switchEnable != prevSwEnable) { // changed
           Serial.print("Switch enable signal: ");
           Serial.println(switchEnable);
@@ -192,7 +199,8 @@ void onRiotOutputChanged(byte riotId, byte portChanged, byte portA, byte portB) 
         //solenoid9 = (bitRead(portA, 7) == 0) ? false : true;
         dispatchOutputData(SOLENOIDS);
         //sound = bitRead(portA, 4) ? 0 : ~portA & 0x0f;
-        sound = (portA & 0x10 == 0) ? (byte)~portA & 0x0f : 0;
+        sound = (portA & 0x10) ? 0 : (byte)~portA & 0x0f;
+        sound |= sound16_L4<<4;
         dispatchOutputData(SOUND);
       }
       else { // port B: lamps controlif (strobeNum != prevStrobeNum)
@@ -231,10 +239,10 @@ void dispatchOutputData(byte type) {
       }
       break;
     case SOUND:
-      mcpWritePB(0, sound | ((solenoids & 0x0100)>>4));
-      if (prevSnd != sound && (sound | (sound16_L4<<3)) > 0) {
+      mcpWritePB(0, (sound & 0xff) | ((solenoids & 0x0100)>>4));
+      if (prevSnd != sound && sound > 0) {
         Serial.print(F("Sound: "));
-        Serial.print(sound | (sound16_L4<<3));
+        Serial.print(sound);
         Serial.print(F(" (L4:"));
         Serial.print(sound16_L4);
         Serial.println(")");
@@ -260,7 +268,7 @@ void dispatchOutputData(byte type) {
   outpCount[type]++;
 }
 
-// read only system (DUE's) returns and updates returnsN and RIOT-0 inputs.
+// read DUE's returns input and updates returnsN and RIOT-0 inputs.
 // called before every RIOT #0 port read
 void readSysReturns() {
   byte portInput;
@@ -272,19 +280,23 @@ void readSysReturns() {
   }
   else { // normal switch reading
     strobeNum = toStrobeNum[(byte)~strobesN];
-    if (strobeNum != prevStrobeNum) return;
-    if (forcedReturn[strobeNum]) returnsN = (byte)~forcedReturn[strobeNum];
-    else returnsN = (byte)(((RETURNS_PORT->PIO_PDSR & RETURNS_bitmask) >> RETURNS_LSB_POS) & 0xff);
+    if (strobeNum) {
+      if (forcedReturn[strobeNum]) returnsN = (byte)~forcedReturn[strobeNum];
+      else returnsN = (byte)(((RETURNS_PORT->PIO_PDSR & RETURNS_bitmask) >> RETURNS_LSB_POS) & 0xff);
+    }
+    else returnsN = 0xff; // no strobes
   }
   portInput = (byte)~returnsN;
   if (returnsCache[strobeNum] != portInput) {
-    Serial.print("strobe: ");
-    //Serial.print((byte)~strobesN);
-    //Serial.print("->");
-    Serial.print(strobeNum);
-    Serial.print(": ");
-    Serial.print(portInput);
-    if (switchEnable) Serial.println(" (opSwitches)"); else Serial.println("");
+    if (strobeNum) {
+      Serial.print("strobe: ");
+      //Serial.print((byte)~strobesN);
+      //Serial.print("->");
+      Serial.print(strobeNum);
+      Serial.print(": ");
+      Serial.print(portInput);
+      if (switchEnable) Serial.println(" (opSwitches)"); else Serial.println("");
+    }
     returnsCache[strobeNum] = portInput;
   }
   setRiotInputs(0, RIOTPORT_A, portInput); // returns

@@ -37,7 +37,7 @@ bool resetPushed = false;
 //unsigned long process_start_t;
 
 // external memory (except RIOTs' RAM)
-byte ram[256];
+byte ram[RAMSIZE];
 PROGMEM byte rom[ROMSIZE + 1];
 PROGMEM byte prom[PROMSIZE + 1];
 
@@ -67,7 +67,7 @@ void setup() {
   digitalWrite(TXLED_PIN, HIGH);
   digitalWrite(IOEN_PIN, LOW);
   
-  debugLedsOutput(1);
+  //debugLedsOutput(1);
   
   // Serial COM init
   Serial.begin(BAUDRATE);
@@ -83,19 +83,24 @@ void setup() {
   if (!initSD()) infiniteLoop();
   loadROM(prom, PROMFILE); // loads ROM in prom[]
   loadROM(rom, ROMFILE); // loads ROM in rom[]
-  debugLedsOutput(2);
+  //debugLedsOutput(2);
+
+  // NVRAM setup
+  //for (int i=0; i<RAMSIZE; i++) ram[i]=0;
   loadRAM(ram, RAMFILE); // loads last RAM data in ram[]
-  debugLedsOutput(3);
+  //debugLedsOutput(3);
 
   Serial.println(F("RIOTs reset..."));
   resetRIOTs();
-  debugLedsOutput(4);
+  //debugLedsOutput(4);
+  
   Serial.println(F("Interface init..."));
   initInterface();
-  debugLedsOutput(7);
+  //debugLedsOutput(7);
+  
   Serial.println(F("Timers init..."));
   initTimers();
-  debugLedsOutput(8);
+  //debugLedsOutput(8);
   
   // 6502 reset
   resetCPU();
@@ -104,17 +109,20 @@ void setup() {
   Serial.print(F("IRQ vector at: $"));
   uint16_t ad = FETCHW(IRQ_VECTOR);
   Serial.println(ad, HEX);
-/*
+
   // GPIO test
-  Serial.println(F("Testing GPIO..."));
-  testInterface();
-  Serial.println(F("end of test."));
-  infiniteLoop();
-*/
+  /*
+  while(1) {
+    Serial.println(F("Testing GPIO..."));
+    testInterface();
+    Serial.println(F("end of test."));
+  }
+  */
+
   Serial.println(F("Go..."));
   lcd.clear();
   lcdprn("Running...", 0);
-  debugLedsOutput(0);
+  //debugLedsOutput(0);
 }
 
 void loop() {
@@ -127,18 +135,19 @@ void loop() {
   String cmd;
   
   startT = millis();
+  
   if (!stopExecution) {
+    // following code will be executed periodically ----------
+    
     //irqCalls = irqCount;
+    //irqCalls = 0;
     irqCount = 0;
-    irqCalls = 0;
      
     // CPU emulation cycle
     while (millis() - startT < INFO_DELAY) {
       iCount += execBatch(BATCH_CLK_COUNT);
       cCount += BATCH_CLK_COUNT;
     }
-    
-    // following code will be executed periodically ----------
     
     // non-volatile RAM updates
     if (ramMod) {
@@ -252,9 +261,9 @@ void loop() {
     prevAdr = iADR;
 
     // escape key
+    for (i=0; i<8; i++) forcedReturn[i] = 0; // resets forced returns
     if (SERIALINP && Serial.available() > 0) {
-      for (i=0; i<8; i++) forcedReturn[i] = 0; // resets forced returns
-      //Serial.println(F(">Serial input detected..."));
+      Serial.println(F(">Serial input detected..."));
       cmd = Serial.readString();
       if (cmd.equals("\\")) { // STOPS EXECUTION
         stopExecution = true;
@@ -277,6 +286,7 @@ void loop() {
         }
       }
     }
+    
   }
   else infiniteLoop(); // CPU execution stop
 }

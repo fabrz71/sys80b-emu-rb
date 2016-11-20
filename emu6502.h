@@ -277,7 +277,7 @@ long execBatch(long clkCount) {
     switch (IR) { // istruction dispatch
 
       case 0x00: // BRK : software interrupt
-        Start();
+        irqStart();
         SET(B);
 //        PUSHW(PC + 1);
 //        PUSH(P);

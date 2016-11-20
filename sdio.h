@@ -5,6 +5,8 @@
 #include <SPI.h>
 //#include "shared.h"
 
+#define RAMSIZE 256
+
 boolean sdOk;
 
 boolean initSD();
@@ -90,7 +92,7 @@ boolean loadRAM(byte m[], char *fileName) {
   
   Serial.print(F("Loading RAM '"));
   Serial.print(fileName);
-  Serial.print("'... ");
+  Serial.println("'... ");
   if (!SD.exists(fileName)) {
     Serial.println(F("Warning: File does not exist."));
     return false;
@@ -102,22 +104,30 @@ boolean loadRAM(byte m[], char *fileName) {
   }
   digitalWrite(RXLED_PIN, LOW);
   fsz = f.size();
-  if ((fsz & 0xff) != 0) {
+  if ((fsz % RAMSIZE) != 0) {
     Serial.print(F("Warning: RAM file '"));
     Serial.print(fileName);
     Serial.print(F("' size ("));
     Serial.print(fsz);
-    Serial.println(F(") is not multiple of 256."));
+    Serial.print(F(") is not multiple of"));
+    Serial.println(RAMSIZE);
   }
-  if (fsz > 256) f.seek(fsz-256-1);
-  for (i = 0; i < 256 && i < fsz; i++) m[i] = (char)f.read();
+  if (fsz > RAMSIZE) f.seek(fsz-RAMSIZE-1);
+  for (i = 0; i < RAMSIZE && i < fsz; i++) {
+    m[i] = (char)f.read();
+    if (SERIALOUT) {
+      Serial.print(m[i], HEX);
+      if (i%16) Serial.print(", "); 
+      else Serial.println(", ");
+    }
+  }
+  Serial.println("- ok.");
   f.close();
   digitalWrite(RXLED_PIN, HIGH);
-  Serial.println("ok.");
   return true;
 }
 
-// 256-bytes cumulative writing (file append)
+// RAMSIZE-bytes cumulative writing (file append)
 boolean updateRAM(byte m[], char *fileName) {
   File f;
   long r;
@@ -129,10 +139,10 @@ boolean updateRAM(byte m[], char *fileName) {
     return false;
   }
   digitalWrite(TXLED_PIN, LOW);
-  r = f.write(m, 256);
+  r = f.write(m, RAMSIZE);
   f.close();
   digitalWrite(TXLED_PIN, HIGH);
-  if (r < 256) {
+  if (r < RAMSIZE) {
     Serial.println(F("Troubles writing file!"));
     return false;
   }
