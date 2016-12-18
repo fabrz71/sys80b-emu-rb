@@ -1,12 +1,11 @@
 // Gottileb System 80/B emulator for Arduino DUE
 
-//#include <avr/pgmspace.h>
-#include <SD.h>
+//#include <SD.h>
 #include <SPI.h>
 #include <LiquidCrystal.h>
+#include "memory.h"
 #include "global.h"
 #include "emu6502.h"
-#include "sdio.h"
 #include "riots.h"
 #include "interface.h"
 
@@ -14,38 +13,25 @@
 #define BATCH_CLK_COUNT 50000
 #define INFO_DELAY 1000
 
-//#define PROMFILE "PROM.BIN"
-#define PROMFILE "PROM1.CPU"
-#define PROMADR 0x2000
-#define PROMSIZE 8192
-#define ROMFILE "PROM2.CPU"
-#define ROMADR 0x1000
-#define ROMSIZE 4096
-#define RAMFILE "RAMDATA.BIN"
-#define MMASK 0x3fff // System 80/b memory mask (A14 & A15 not connected)
-
 #define LCD_COLS 16
 #define LCD_ROWS 2
 
 LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
 
-//int irqCalls = 0;
-bool ramMod = false;
-int ramWrites = 0;
-int slamSwPushed = false;
+bool slamSwPushed = false;
 bool resetPushed = false;
-//unsigned long process_start_t;
 
-// external memory (except RIOTs' RAM)
-byte ram[RAMSIZE];
-PROGMEM byte rom[ROMSIZE + 1];
-PROGMEM byte prom[PROMSIZE + 1];
+// convenience Due's hardware interrupt flags:
+// bit 0 set = DUE's TC3 timer irq = RIOT #0 timer event
+// bit 1 set = DUE's TC4 timer irq = RIOT #1 timer event
+// bit 2 set = DUE's TC5 timer irq = RIOT #2 timer event
+// bit 3 set = DUE's slam switch interrupt
+volatile byte dueIrq; 
 
 // routines/functions
-byte mread(uint16_t adr);
-void mwrite(uint16_t adr, byte data);
 void debugLedsOutput(byte val);
-void lcdprn(char *st, byte line);
+void lcdprn(const char *st, byte line);
+void onDueIrq();
 
 void setup() { 
   pinMode(LED_PIN, OUTPUT);
@@ -78,18 +64,14 @@ void setup() {
   lcd.clear();
   lcd.noCursor();
   lcdprn("Starting...", 0);
-    
-  // ROMs setup
+
+  // SD init
   if (!initSD()) infiniteLoop();
-  loadROM(prom, PROMFILE); // loads ROM in prom[]
-  loadROM(rom, ROMFILE); // loads ROM in rom[]
-  //debugLedsOutput(2);
-
-  // NVRAM setup
-  //for (int i=0; i<RAMSIZE; i++) ram[i]=0;
-  loadRAM(ram, RAMFILE); // loads last RAM data in ram[]
-  //debugLedsOutput(3);
-
+  
+  // Sys80b RAM/ROM setup
+  Serial.println(F("RAM/ROM setup..."));
+  if (!initMemory()) infiniteLoop();
+  
   Serial.println(F("RIOTs reset..."));
   resetRIOTs();
   //debugLedsOutput(4);
@@ -110,8 +92,8 @@ void setup() {
   uint16_t ad = FETCHW(IRQ_VECTOR);
   Serial.println(ad, HEX);
 
-  // GPIO test
   /*
+  // GPIO test
   while(1) {
     Serial.println(F("Testing GPIO..."));
     testInterface();
@@ -150,11 +132,10 @@ void loop() {
     }
     
     // non-volatile RAM updates
-    if (ramMod) {
-      updateRAM(ram, RAMFILE);
+    if (ramWrites) {
+      saveRAM();
       Serial.print(ramWrites);
       Serial.println(F(" RAM bytes writes."));
-      ramMod = false;
       ramWrites = 0;
     }
 
@@ -188,13 +169,13 @@ void loop() {
     // RIOTs stats output
     Serial.print(F("RIOTs IRQ reqs: "));
     for (i=0; i<3; i++) {
-      Serial.print(getRiotIrqCount(i));
+      Serial.print(getRiotStats(i, RIOT_IRQ_COUNT));
       if (i == 2) Serial.print(" - "); 
       else Serial.print(", ");
     }
     Serial.print(F("RIOTs IRQ collisions: "));
     for (i=0; i<3; i++) {
-      Serial.print(getRiotLostIrqCount(i));
+      Serial.print(getRiotStats(i, RIOT_IRQ_COLL));
       if (i == 2) {
           Serial.print(" irqRequest="); 
           Serial.println(irqRequest);
@@ -203,7 +184,7 @@ void loop() {
     }
     Serial.print(F("RIOTs timer writes: "));
     for (i=0; i<3; i++) {
-      Serial.print(getRiotTimerWrites(i));
+      Serial.print(getRiotStats(i, RIOT_TMR_WRTS));
       if (i == 2) Serial.print(" - "); 
       else Serial.print(", ");
     }
@@ -212,26 +193,28 @@ void loop() {
     Serial.print(F("RIOTs reads: "));
     for (i=0; i<3; i++) {
       Serial.print(i);
+      Serial.print(riotName[i]);
       Serial.print(": (A=");
-      Serial.print(getRiotPioReadsA(i));
+      Serial.print(getRiotStats(i, RIOT_PA_READS));
       Serial.print(",B=");
-      Serial.print(getRiotPioReadsB(i));
+      Serial.print(getRiotStats(i, RIOT_PB_READS));
       if (i == 2) Serial.println(")"); else Serial.print("), ");
     }
     
     Serial.print(F("RIOTs writes: "));
     for (i=0; i<3; i++) {
       Serial.print(i);
+      Serial.print(riotName[i]);
       Serial.print(": (A=");
-      Serial.print(getRiotPioWritesA(i));
+      Serial.print(getRiotStats(i, RIOT_PA_WRTS));
       Serial.print(",B=");
-      Serial.print(getRiotPioWritesB(i));
+      Serial.print(getRiotStats(i, RIOT_PB_WRTS));
       if (i == 2) Serial.println(")"); else Serial.print("), ");
     }
 /*
     Serial.print(F("slamSwitch interrupts: "));
     Serial.println(slamIntCount);
-
+*/
     // outputs stats
     Serial.print(F("Output changes: "));
     for (i=0; i<5; i++) {
@@ -241,7 +224,7 @@ void loop() {
       if (i == 4) Serial.println(""); 
       else Serial.print(", ");
     }
-
+/*
     // returns cache
     Serial.print(F("Returns cache: ["));
     for (i=0; i<8; i++) {
@@ -272,6 +255,7 @@ void loop() {
           Serial.print(shortTimerDelayCount[i]);
           if (i == 2) Serial.println(""); else Serial.print(", ");
         }
+        saveRAM();
         Serial.println(F("*** EXECUTION STOPPED ***"));
       }
       else {
@@ -291,43 +275,6 @@ void loop() {
   else infiniteLoop(); // CPU execution stop
 }
 
-byte mread(uint16_t adr) {
-  uint16_t selector = (adr & 0x3800) >> 11; // A11, A12, A13 address bits
-  switch (selector) {
-    case 0b000: // RIOTs: $0000-$017F
-      return readRiot(adr);
-    case 0x001: // RIOTs mirroring
-      return readRiot(adr & 0x3ff);
-    case 0b010: // ROM (12 address bits used)
-      // ROM: CPU A15 connected to ROM A11
-      if ((adr & 0x8000) == 0) return rom[adr & 0x7ff]; // lower half case
-      return rom[(adr & 0x7ff) | 0x0800]; // upper half case
-    case 0b011: // RAM
-      return ram[adr & 0x00ff];
-    default: // PROM (13 address bits used)
-      return prom[adr & 0x1fff];
-  }
-  // should never be reached
-  Serial.print(F("WARNING: Unhandled address $"));
-  Serial.println(adr, HEX);
-  Serial.println(F("mread(): returns 0"));
-  return 0;
-}
-
-void mwrite(uint16_t adr, byte data) {
-  uint16_t selector = (adr & 0x3800) >> 11; // A11, A12, A13 address bits
-  if (selector == 0b000) writeRiot(adr, data);
-  else if (selector == 0b011) {
-    ram[adr & 0x00ff] = data; // writes data in RAM
-    ramWrites++;
-    ramMod = true;
-  }
-  else {
-    Serial.print(F("mwrite(): WARNING: Unhandled address $"));
-    Serial.println(adr, HEX);
-  }
-}
-
 void debugLedsOutput(byte val) {
   digitalWrite(DBG0_PIN, (val & 1) ? HIGH : LOW);
   digitalWrite(DBG1_PIN, (val & 2) ? HIGH : LOW);
@@ -335,8 +282,34 @@ void debugLedsOutput(byte val) {
   digitalWrite(DBG3_PIN, (val & 8) ? HIGH : LOW);
 }
 
-void lcdprn(char *st, byte line) {
+void lcdprn(const char *st, byte line) {
   lcd.setCursor(0, line);
   lcd.print(st);
 }
 
+// to call after an hardware interrupt event (ISR) -
+// updates Sys80 state after a DUE interrupt.
+// At least one of the 4 LS bits of dueIrq shoud be set
+void onDueIrq() {
+  byte id; // RIOT id
+  byte irqBit;
+
+  noInterrupts();
+  irqBit = 1;
+  if (dueIrq & 0b0111) { // RIOT timer interrupt
+    for (id=0; id<3; id++) { 
+      if (dueIrq & irqBit) { 
+        riot[id].zeroTime = 0xff;
+        set_TMR_INTF(id);
+        dueIrq &= (byte)~irqBit;
+      }
+      irqBit <<= 1;
+    }
+  }
+  if (dueIrq & 0b1000) { // slam switch changed
+    slamSw = (digitalRead(SLAM_PIN) == LOW);
+    setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // may yield 6502 IRQ
+    dueIrq &= 0b11110111;
+  }
+  interrupts();
+}

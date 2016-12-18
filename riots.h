@@ -5,15 +5,15 @@
 #define RIOTS_COUNT 3
 
 // PA7 signal edge detecion type
-#define POS_EDGE 1 // 0: PA7 negative edge; 1: PA7 positive edge
+#define POS_EDGE 0b00000001 // 0: PA7 negative edge; 1: PA7 positive edge
 // PA7 signal interrupt enable
-#define PA7_IRQ  2 // 0: disabled; 1: enabled
+#define PA7_IRQ  0b00000010 // 0: disabled; 1: enabled
 // timer interrupt enable
-#define TMR_IRQ  8 // 0: disabled; 1: enabled
+#define TMR_IRQ  0b00001000 // 0: disabled; 1: enabled
 // interrupt flag from PA7 edge detecion
-#define PA7_INTF 64 // (state output) causes IRQ when PA7_IRQ enabled
+#define PA7_INTF 0b01000000 // (state output) causes IRQ when PA7_IRQ enabled
 // interrupt flag from timer
-#define TMR_INTF 128 // (state output) causes IRQ when TMR_IRQ enabled
+#define TMR_INTF 0b10000000 // (state output) causes IRQ when TMR_IRQ enabled
 
 #define CLEARFLAG(r,f) r->flags &= (byte)~((byte)(f))
 #define SETFLAG(r,f) r->flags |= (byte)(f)
@@ -22,23 +22,31 @@
 #define SETFL(n,f) riot[n].flags |= (byte)(f)
 #define FL(n,f) ((riot[n].flags & (byte)(f)) != 0)
 
-#define SETIRQOUTP(n) { riot[n].irqOut = true; irqRequest |= (byte)(1<<(n)); }
-#define CLRIRQOUTP(n) { riot[n].irqOut = false; irqRequest &= ~(byte)(1<<(n)); }
+#define SET_RIOTIRQOUTP(n) riot[n].irqOut = true; irqRequest |= (byte)(1<<(n))
+#define CLR_RIOTIRQOUTP(n) riot[n].irqOut = false; irqRequest &= ~(byte)(1<<(n))
+//#define RIOTIRQ_TEST(n) ( (riot[n].flags & PA7_MASK) == PA7_MASK) || (riot[n].flags & TMR_MASK) == TMR_MASK) )
+//#define UPDATE_RIOTIRQ(n) if (RIOTIRQ_TEST(n)) SET_RIOTIRQOUTP(n); else CLR_RIOTIRQOUTP(n)
 
+const byte PA7_MASK = PA7_INTF | PA7_IRQ;
+const byte TMR_MASK = TMR_INTF | TMR_IRQ;
 const uint16_t RIOT_period[] = { 1, 8, 64, 1024 };
+const char *riotName[] = { "[Returns,Strobes]", "[SlamSw,Display]", "[Sol&Snd,Lamps]" };
+
+enum riot_stats { RIOT_IRQ_COUNT, RIOT_IRQ_COLL, RIOT_TMR_WRTS, 
+                  RIOT_PA_READS, RIOT_PA_WRTS, RIOT_PB_READS, RIOT_PB_WRTS };
 
 // RIOTs
 struct riotData {
   // RAM section
   byte ram[128]; // RIOT's sRAM
   // I/O section
-  volatile byte irA, irB; // (virtual) input register A & B
+  byte irA, irB; // (virtual) input register A & B
   byte orA, orB; // output registers A & B
   byte ddrA, ddrB; // data direction registers A & B
   // timer register
   byte intervals; // interval timer register
   uint16_t period; // 1T, 8T, 64T, 1024T (T = ticks)
-  volatile byte flags;   // bit 0 (0x01): edge detect type (input)
+  byte flags;   // bit 0 (0x01): edge detect type (input)
   // bit 1 (0x02): PA7 interrupt enable (input)
   // bit 3 (0x08): timer interrupt enable (input)
   // bit 6 (0x40): PA7 interrupt flag (output)
@@ -46,10 +54,10 @@ struct riotData {
 
   // meta-registers
   uint32_t zeroTime; // timer zero time : 0 = disabled (running flag)
-  volatile byte lastPA7; // 7-th bit of irA on last check (used for edge detection)
-  volatile bool irqOut; // IRQ output signal
+  byte lastPA7; // 7-th bit of irA on last check (used for edge detection)
+  bool irqOut; // IRQ output signal
   //bool irqSent; // cpu IRQ signal already sent
-  volatile uint16_t irqCount; // cpu IRQ signals count (stats)
+  uint16_t irqCount; // cpu IRQ signals count (stats)
   uint16_t irqColl; // cpu IRQ collisions (stats)
   uint16_t timerWrts; // timer updates (stats)
   uint16_t pioRdsA; // port A reads (stats)
@@ -67,8 +75,8 @@ extern void onRiotOutputChanged(byte riodId, byte portChanged, byte portA, byte 
 
 void resetRIOT(byte n);
 void resetRIOTs();
-void writeRiot(byte n, uint16_t adr, byte dta);
-byte readRiot(byte n, uint16_t adr);
+void writeRiot(uint16_t adr, byte dta);
+byte readRiot(uint16_t adr);
 void updateRiotTimer(struct riotData *r);
 void checkPA7Signal(byte id);
 void setRiotInputs(byte id, byte port, byte data);
@@ -77,13 +85,7 @@ void set_TMR_INTF(byte n);
 void clr_TMR_INTF(byte n);
 void set_PA7_INTF(byte n);
 void clr_PA7_INTF(byte n);
-//void _updIrqOutput(byte n);
-uint16_t getRiotIrqCount(byte n);
-uint16_t getRiotLostIrqCount(byte n);
-uint16_t getRiotTimerWritesA(byte n);
-uint16_t getRiotPioWritesA(byte n);
-uint16_t getRiotTimerWritesB(byte n);
-uint16_t getRiotPioWritesB(byte n);
+uint16_t getRiotStats(byte n, riot_stats s_id);
 
 void resetRIOT(byte n) {
   struct riotData *r = &(riot[n]);
@@ -105,7 +107,7 @@ void resetRIOT(byte n) {
   r->pioRdsB = 0;
   r->pioWrtsA = 0;
   r->pioWrtsB = 0;
-  CLRIRQOUTP(n);
+  CLR_RIOTIRQOUTP(n);
 }
 
 void resetRIOTs() {
@@ -147,7 +149,7 @@ void writeRiot(uint16_t adr, byte dta) {
       */
       noInterrupts();
       r->timerWrts++;
-      if (tmrSet[n]) stopTimer(n);
+      if (tmrSet & (1<<n)) stopTimer(n);
       // updates "timer interrupt enabled" flag and reset interrupt flag
       clr_TMR_INTF(n);
       if (adr & 0x08) SETFLAG(r, TMR_IRQ); else CLEARFLAG(r, TMR_IRQ);
@@ -247,7 +249,7 @@ byte readRiot(uint16_t adr) {
   return dta;
 }
 
-// called from outside when inputs has changed -
+// called when inputs has changed, updates RIOT state -
 // may yield IRQ
 void setRiotInputs(byte id, byte port, byte data) {
   //if (id >= RIOTS_COUNT) return;
@@ -289,7 +291,7 @@ void checkPA7Signal(byte id) {
   pa7 = riot[id].irA & 0x80;
   if (pa7 != riot[id].lastPA7) { // on PA7 change...
     if (FL(id, POS_EDGE)) { // positive edge detection
-      if (pa7 > 0) set_PA7_INTF(id);
+      if (pa7) set_PA7_INTF(id);
     }
     else { // negative edge detection
       if (pa7 == 0) set_PA7_INTF(id);
@@ -298,37 +300,41 @@ void checkPA7Signal(byte id) {
   }
 }
 
-// to call after a DUE-timer irq call -
-// updates corresponding RIOT's timer state after DUE's timer event.
-// At least one of the first 3 bits of dueTimerIrq shoud be set:
-// bit 0 set = DUE's TC3 timer irq = RIOT #0 timer event
-// bit 1 set = DUE's TC4 timer irq = RIOT #1 timer event
-// bit 2 set = DUE's TC5 timer irq = RIOT #2 timer event
+/*
+// called after a DUE hardware interrupt -
+// updates corresponding RIOT's state after a DUE interrupt.
+// At least one of the first 3 bits of dueIrq shoud be set:
+
 void onDueTimerIrq() {
   byte id; // RIOT id
-
+  byte irqBit;
+  
+  irqBit = 1;
   for (id=0; id<3; id++) {
-    if (dueTimerIrq & tmrBit[id]) {
+    if (dueIrq & irqBit) {
       riot[id].zeroTime = 0xff;
       set_TMR_INTF(id);
-      dueTimerIrq &= ((byte)~tmrBit[id]);
+      dueIrq &= (byte)~irqBit;
     }
+    irqBit <<= 1;
   }
+  if (dueIrq & irqBit)
 }
+*/
 
 void set_TMR_INTF(byte n) {
   SETFL(n, TMR_INTF);
   if (FL(n, TMR_IRQ)) {
     riot[n].irqCount++;
     if (riot[n].irqOut) riot[n].irqColl++;
-    SETIRQOUTP(n);
+    else { SET_RIOTIRQOUTP(n); }
   }
 }
 
 void clr_TMR_INTF(byte n) {
   CLEARFL(n, TMR_INTF);
-  if (FL(n, PA7_INTF) && FL(n, PA7_IRQ)) SETIRQOUTP(n)
-  else CLRIRQOUTP(n);
+  if ((riot[n].flags & PA7_MASK) != PA7_MASK) { CLR_RIOTIRQOUTP(n); }
+  else { SET_RIOTIRQOUTP(n); }
 }
 
 void set_PA7_INTF(byte n) {
@@ -336,60 +342,53 @@ void set_PA7_INTF(byte n) {
   if (FL(n, PA7_IRQ)) {
     riot[n].irqCount++;
     if (riot[n].irqOut) riot[n].irqColl++;
-    SETIRQOUTP(n);
+    else { SET_RIOTIRQOUTP(n); }
   }
 }
 
 void clr_PA7_INTF(byte n) {
   CLEARFL(n, PA7_INTF);
-  if (FL(n, TMR_INTF) && FL(n, TMR_IRQ)) SETIRQOUTP(n)
-  else CLRIRQOUTP(n);
+  if ((riot[n].flags & TMR_MASK) != TMR_MASK) { CLR_RIOTIRQOUTP(n); }
+  else { SET_RIOTIRQOUTP(n); }
 }
 
-// void _updIrqOutput(byte n) {
-//   if ( (FL(n, PA7_INTF) && FL(n, PA7_IRQ)) ||
-//        (FL(n, TMR_INTF) && FL(n, TMR_IRQ)) ) SETIRQOUTP(n);
-//   else CLRIRQOUTP(n);
-// }
+uint16_t getRiotStats(byte n, riot_stats s_id) {
+  uint16_t r;
 
-uint16_t getRiotIrqCount(byte n) {
-  uint16_t i = riot[n].irqCount;
-  riot[n].irqCount = 0;
-  return i;
-}
+  r = 0;
+  switch (s_id) {
+    case RIOT_IRQ_COUNT:
+      r = riot[n].irqCount;
+      riot[n].irqCount = 0;
+      break;
+    case RIOT_IRQ_COLL:
+      r = riot[n].irqColl;
+      riot[n].irqColl = 0;
+      break;
+    case RIOT_TMR_WRTS:
+      r = riot[n].timerWrts;
+      riot[n].timerWrts = 0;
+      break;
+    case RIOT_PA_READS:
+      r = riot[n].pioRdsA;
+      riot[n].pioRdsA = 0;
+      break;
+    case RIOT_PA_WRTS:
+      r = riot[n].pioWrtsA;
+      riot[n].pioWrtsA = 0;
+      break;
+    case RIOT_PB_READS:
+      r = riot[n].pioRdsB;
+      riot[n].pioRdsB = 0;
+      break;
+    case RIOT_PB_WRTS:
+      r = riot[n].pioWrtsB;
+      riot[n].pioWrtsB = 0;
+      break;
+    default:
+      r = -1;
+   }
+  return r;
+};
 
-uint16_t getRiotLostIrqCount(byte n) {
-  uint16_t i = riot[n].irqColl;
-  riot[n].irqColl = 0;
-  return i;
-}
 
-uint16_t getRiotTimerWrites(byte n) {
-  uint16_t i = riot[n].timerWrts;
-  riot[n].timerWrts = 0;
-  return i;
-}
-
-uint16_t getRiotPioReadsA(byte n) {
-  uint16_t i = riot[n].pioRdsA;
-  riot[n].pioRdsA = 0;
-  return i;
-}
-
-uint16_t getRiotPioWritesA(byte n) {
-  uint16_t i = riot[n].pioWrtsA;
-  riot[n].pioWrtsA = 0;
-  return i;
-}
-
-uint16_t getRiotPioReadsB(byte n) {
-  uint16_t i = riot[n].pioRdsB;
-  riot[n].pioRdsB = 0;
-  return i;
-}
-
-uint16_t getRiotPioWritesB(byte n) {
-  uint16_t i = riot[n].pioWrtsB;
-  riot[n].pioWrtsB = 0;
-  return i;
-}

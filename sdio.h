@@ -1,20 +1,20 @@
 // microSD R/W functions
 
-//#include <stdio.h>
 #include <SD.h>
 #include <SPI.h>
-//#include "shared.h"
-
-#define RAMSIZE 256
 
 boolean sdOk;
+extern const byte SD_CS_PIN;
+extern const byte RXLED_PIN;
+extern const byte TXLED_PIN;
+extern const bool SERIALOUT;
 
 boolean initSD();
 void disableSD();
-void printDir();
-boolean loadROM(byte m[], char *fileName);
-boolean loadRAM(byte m[], char *fileName);
-boolean updateRAM(byte m[], char *fileName);
+void printSDdir();
+boolean loadROMfromSD(byte m[], const char *fileName, uint16_t sz);
+boolean loadRAMfromSD(byte m[], const char *fileName, uint16_t sz);
+boolean writeRAMtoSD(byte m[], const char *fileName, uint16_t sz);
 
 boolean initSD() {
   pinMode(SD_CS_PIN, OUTPUT);
@@ -30,7 +30,7 @@ void disableSD() {
   Serial.println(F("SD disabled"));
 }
 
-void printDir() {
+void printSDdir() {
   Serial.println(F("SD content:"));
   if (!sdOk) Serial.println(F("\tSD is not OK"));
   else {
@@ -53,7 +53,7 @@ void printDir() {
   }
 }
 
-boolean loadROM(byte m[], char *fileName) {
+boolean loadROMfromSD(byte m[], const char *fileName, uint16_t sz) {
   File f;
   long i, fsz;
   word adr = 0;
@@ -86,7 +86,7 @@ boolean loadROM(byte m[], char *fileName) {
 }
 
 // reads only the last 256 bytes of specified file
-boolean loadRAM(byte m[], char *fileName) {
+boolean loadRAMfromSD(byte m[], const char *fileName, uint16_t sz) {
   File f;
   long i, fsz;
   
@@ -104,16 +104,16 @@ boolean loadRAM(byte m[], char *fileName) {
   }
   digitalWrite(RXLED_PIN, LOW);
   fsz = f.size();
-  if ((fsz % RAMSIZE) != 0) {
+  if ((fsz % sz) != 0) {
     Serial.print(F("Warning: RAM file '"));
     Serial.print(fileName);
     Serial.print(F("' size ("));
     Serial.print(fsz);
     Serial.print(F(") is not multiple of"));
-    Serial.println(RAMSIZE);
+    Serial.println(sz);
   }
-  if (fsz > RAMSIZE) f.seek(fsz-RAMSIZE-1);
-  for (i = 0; i < RAMSIZE && i < fsz; i++) {
+  if (fsz > sz) f.seek(fsz-sz);
+  for (i = 0; i < sz && i < fsz; i++) {
     m[i] = (char)f.read();
     if (SERIALOUT) {
       Serial.print(m[i], HEX);
@@ -127,22 +127,22 @@ boolean loadRAM(byte m[], char *fileName) {
   return true;
 }
 
-// RAMSIZE-bytes cumulative writing (file append)
-boolean updateRAM(byte m[], char *fileName) {
+// sz-bytes cumulative writing (file append)
+boolean writeRAMtoSD(byte m[], const char *fileName, uint16_t sz) {
   File f;
   long r;
 
-  Serial.print(F("Updating RAM file... "));
+  Serial.print(F("Writing RAM to SD... "));
   f = SD.open(fileName, FILE_WRITE);
   if (!f) {
     Serial.println(F("Troubles opening file!"));
     return false;
   }
   digitalWrite(TXLED_PIN, LOW);
-  r = f.write(m, RAMSIZE);
+  r = f.write(m, sz);
   f.close();
   digitalWrite(TXLED_PIN, HIGH);
-  if (r < RAMSIZE) {
+  if (r < sz) {
     Serial.println(F("Troubles writing file!"));
     return false;
   }

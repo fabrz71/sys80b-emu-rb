@@ -1,6 +1,9 @@
-// 6502 emulator module
+// 6502 emulator module -
+// does not implements 6502 bugs
 
 #include "dasm6502.h"
+
+//typedef uint8_t byte
 
 // emulator constants
 #define C 1   // carry
@@ -29,8 +32,9 @@ byte P; // 8-bit state register NV-BDIZC
 byte IR; // 8-bit Istruction Register
 
 // utility variables
-byte data; // computation byte
-byte ABH, ABL; // address bus high/low bytes
+byte data; // temporary byte register
+//byte ABH, ABL; // address bus high/low bytes
+uint16_t tmpw; // temporary word register
 uint16_t AB; // 16-bit adress bus
 uint16_t iADR; // istruction adress
 boolean stopExecution = false;
@@ -42,14 +46,13 @@ byte illegalOp = 0;
 volatile byte irqRequest;
 volatile byte nmiRequest;
 volatile byte prevNmiReq; // previous nmiRequest
-volatile byte nestedInterrupts;
 bool nmiRunning; // used for NMI priority over IRQ
 uint16_t irqCount = 0;
 uint16_t nmiCount = 0;
 uint32_t iCount; // executed istructions count for each batch
 
 // external variables
-extern volatile byte dueTimerIrq; // dueTimers.h
+extern volatile byte dueIrq; // (main code)
 extern const byte IRQ_PIN; // global.h
 extern const byte NMI_PIN; // global.h
 
@@ -81,42 +84,52 @@ PROGMEM const byte clkTicks[256] =
 #define WRITE_ZP(w,b) mwrite(w,b)
 #define SET(b) P |= b
 #define CLEAR(b) P &= ~b
-#define POP { POP_WARNING; data = FETCH(0x0100 + (++S)); }
-#define PUSH(b) { PUSH_WARNING; WRITE(0x0100 + (S--), b); }
+//#define POP { POP_WARNING; data = FETCH(0x0100 + (++S)); }
+//#define PUSH(b) { PUSH_WARNING; WRITE(0x0100 + (S--), b); }
+#define POP data = FETCH(0x0100 + (++S))
+#define PUSH(b) WRITE(0x0100 + (S--), b)
 #define PUSHW(w) { PUSH(HIBYTE(w)); PUSH(LOBYTE(w)); }
 //#define POPW { POP; AB = (uint16_t)data; POP; AB &= ((uint16_t)data<<8); }
+#define SET_ABL(b) AB = (AB & 0xff00) | (uint16_t)(b)
+#define SET_ABH(b) AB = (uint16_t)(b<<8) | (AB & 0x00ff)
 #define UPDATE_Z(b) { if (b == 0) SET(Z); else CLEAR(Z); }
 #define UPDATE_N(b) { if ((b & 0x80) == 0) CLEAR(N); else SET(N); }
 #define UPDATE_NZ(b) { UPDATE_Z(b); UPDATE_N(b); }
 #define UPDATE_V(o,r) { if ( ((r) ^ (uint16_t)A) & ((r) ^ (uint16_t)(o)) & 0x0080 ) SET(V); else CLEAR(V); }
+
+/*
 #define POP_WARNING if (S == 0xff) { \
     Serial.println("WARNING: POP on empty stack!"); \
     printState(); \
   }
+
 #define PUSH_WARNING if (S == 0x00) { \
     Serial.println("WARNING: Stack overflow!"); \
     printState(); \
   }
+*/
 
 // ADDRESS MODES HIGH-LEVEL MACROS
 // immediate : #bb
 #define GET_IMM { data = FETCH(PC++); }
 // absolute : $wwww
 #define GET_ABS { \
-    ABL = FETCH(PC++); ABH = FETCH(PC++); \
-    AB = WORD(ABL,ABH); \
+    SET_ABL(FETCH(PC++)); \
+    SET_ABH(FETCH(PC++)); \
     data = FETCH(AB); \
   }
 // X-indexed absolute : $wwww,X
 #define GET_ABSX { \
-    ABL = FETCH(PC++); ABH = FETCH(PC++); \
-    AB = WORD(ABL,ABH)+X; \
+    SET_ABL(FETCH(PC++)); \
+    SET_ABH(FETCH(PC++)); \
+    AB += X; \
     data = FETCH(AB); \
   }
 // Y-indexed absolute : $wwww,Y
 #define GET_ABSY { \
-    ABL = FETCH(PC++); ABH = FETCH(PC++); \
-    AB = WORD(ABL,ABH)+Y; \
+    SET_ABL(FETCH(PC++)); \
+    SET_ABH(FETCH(PC++)); \
+    AB += Y; \
     data = FETCH(AB); \
   }
 // zero page : $bb
@@ -137,7 +150,6 @@ PROGMEM const byte clkTicks[256] =
     data = FETCH_ZP(AB); \
   }
 // X-indexed indirect (zero page) : ($bb,X)
-// ??? page boundaries
 #define GET_ZPIX { \
     data = FETCH(PC++); \
     data += X; \
@@ -153,9 +165,8 @@ PROGMEM const byte clkTicks[256] =
   }
 // indirect : ($wwww) (JMP istruction only)
 #define GETW_ABS { \
-    ABL = FETCH(PC++); \
-    ABH = FETCH(PC++); \
-    AB = WORD(ABL,ABH); \
+    SET_ABL(FETCH(PC++)); \
+    SET_ABH(FETCH(PC++)); \
   }
 // relative : $bb
 #define GETW_REL { \
@@ -164,10 +175,9 @@ PROGMEM const byte clkTicks[256] =
   }
 // indirect : ($wwww) (JMP istruction only)
 #define GETW_IND { \
-    ABL = FETCH(PC++); \
-    ABH = FETCH(PC++); \
-    AB = WORD(ABL,ABH); \
-    AB = FETCHW(AB); \
+    SET_ABL(FETCH(PC++)); \
+    SET_ABH(FETCH(PC++)); \
+    AB = FETCH(AB); \
   }
 
 // ISTRUCTION HIGH-LEVEL MACRO
@@ -255,7 +265,7 @@ void printCurrentIstruction();
 // external functions
 extern byte mread(uint16_t adr); // (main code)
 extern void mwrite(uint16_t adr, byte data); // (main code)
-extern void onDueTimerIrq(); // dueTimers.h
+extern void onDueIrq(); // (main code)
 
 long execBatch(long clkCount) {
   unsigned long tCount = 0; // CPU clock ticks count
@@ -474,15 +484,15 @@ long execBatch(long clkCount) {
 
       case 0x40: // RTI : return from Interrupt
         POP; P = data | Un;
-        POP; ABL = data;
-        POP; ABH = data;
-        PC = WORD(ABL, ABH);
+        POP; SET_ABL(data);
+        POP; SET_ABH(data);
+        PC = AB;
         #ifdef _IRQNMI_OUTPUT
           if (nmiRunning) digitalWrite(NMI_PIN, LOW);
           else digitalWrite(IRQ_PIN, LOW);
         #endif
         nmiRunning = false;
-        nestedInterrupts--;
+        //nestedInterrupts--;
         break;
 
       case 0x41: // EOR (zp,X) : A <- A EOR [(zp + X)]
@@ -574,9 +584,9 @@ long execBatch(long clkCount) {
         break;
 
       case 0x60: // RTS : return from subroutine
-        POP; ABL = data;
-        POP; ABH = data;
-        PC = WORD(ABL, ABH) + 1;
+        POP; SET_ABL(data);
+        POP; SET_ABH(data);
+        PC = AB + 1;
         break;
 
       case 0x61: // ADC (zp,X) : A <- A + [(zp + X)] + flag_C
@@ -1113,7 +1123,7 @@ long execBatch(long clkCount) {
       interrupts();
     #endif
 
-    if (dueTimerIrq != 0) onDueTimerIrq();
+    if (dueIrq) onDueIrq();
 
   } while (tCount < clkCount);
 
@@ -1135,7 +1145,7 @@ void resetCPU() {
   PC = FETCHW(RST_VECTOR);
   irqRequest = 0;
   nmiRequest = 0;
-  nestedInterrupts = 0;
+  //nestedInterrupts = 0;
   #ifdef _IRQNMI_OUTPUT
     digitalWrite(IRQ_PIN, LOW);
     digitalWrite(NMI_PIN, LOW);
@@ -1155,7 +1165,7 @@ void irqStart() {
   SET(I);
   PC = FETCHW(IRQ_VECTOR);
   irqCount++;
-  nestedInterrupts++;
+  //nestedInterrupts++;
 }
 
 void nmiStart() {
@@ -1168,7 +1178,7 @@ void nmiStart() {
   SET(I);
   PC = FETCHW(NMI_VECTOR);
   nmiCount++;
-  nestedInterrupts++;
+  //nestedInterrupts++;
   nmiRunning = true;
 }
 

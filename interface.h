@@ -25,7 +25,7 @@ PROGMEM const uint16_t mux16[16] =
   { 0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
     0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x8000 };
 
-// 8 bit demux output
+// 8 bit demux output - returns highest bit set to 1
 PROGMEM const byte toStrobeNum[] =
   { 0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
     6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
@@ -51,7 +51,7 @@ byte sound; // outputs
 byte lampCtrl; // outputs
 uint16_t lampStrobes; // outputs
 //byte displayData; // outputs: D0-D7 display data bus
-volatile bool slamSw; // input
+bool slamSw; // input
 
 // System interface logic vars
 byte displayLatch; // display D0-D7 data latch
@@ -68,8 +68,9 @@ byte prevSnd; // previous value of sound
 // auxiliary/stats/debug vars
 byte returnsCache[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value 0 not used
 byte forcedReturn[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // strobe = 1..8 - first value 0 non used
-volatile uint32_t slamIntCount = 0;
+uint32_t slamIntCount = 0;
 volatile uint16_t outpCount[5] = {0, 0, 0, 0, 0}; // output changes count (stats) - see outputType enum
+extern volatile byte dueIrq; // (main code)
 
 extern void setRiotInputs(byte id, byte port, byte data); // riots.h
 extern void debugLedsOutput(byte val);
@@ -353,10 +354,10 @@ void updateRIOTsInput() {
 */
 
 // ISR
+// communicates DUE hardware interrupt event to emulator
+// through dueIrq variable
 void onSlamChanged() {
-  if(slamIntCount++ == 0) return; // ignore first occurrence
-  slamSw = (digitalRead(SLAM_PIN) == LOW);
-  setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // may yield 6502 IRQ
+  if (slamIntCount++ > 0) dueIrq |= 0b1000; // ignore first occurrence
 }
 
 uint16_t getOutpCount(byte n) {
