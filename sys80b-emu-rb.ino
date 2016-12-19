@@ -18,8 +18,9 @@
 
 LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
 
-bool slamSwPushed = false;
 bool resetPushed = false;
+uint32_t iCnt; // cumulative 6502 istructions count
+uint32_t cCnt; // cumulative 6502 clock ticks (approx)
 
 // convenience Due's hardware interrupt flags:
 // bit 0 set = DUE's TC3 timer irq = RIOT #0 timer event
@@ -32,6 +33,7 @@ volatile byte dueIrq;
 void debugLedsOutput(byte val);
 void lcdprn(const char *st, byte line);
 void onDueIrq();
+void printStats();
 
 void setup() { 
   pinMode(LED_PIN, OUTPUT);
@@ -109,43 +111,28 @@ void setup() {
 
 void loop() {
   int i;
-  long iCount = 0;
-  long cCount = 0;
   long startT;
   uint16_t prevAdr = 0;
-  //char ch;
   String cmd;
   
   startT = millis();
   
-  if (!stopExecution) {
-    // following code will be executed periodically ----------
-    
-    //irqCalls = irqCount;
-    //irqCalls = 0;
-    irqCount = 0;
-     
-    // CPU emulation cycle
+  if (!stopExecution) { // following code will be executed periodically ---
+
+    // CPU emulation batch
     while (millis() - startT < INFO_DELAY) {
-      iCount += execBatch(BATCH_CLK_COUNT);
-      cCount += BATCH_CLK_COUNT;
+      iCnt += execBatch(BATCH_CLK_COUNT);
+      cCnt += BATCH_CLK_COUNT;
     }
-    
+
     // non-volatile RAM updates
     if (ramWrites) {
       saveRAM();
-      Serial.print(ramWrites);
-      Serial.println(F(" RAM bytes writes."));
+      if (SERIALOUT) {
+        Serial.print(ramWrites);
+        Serial.println(F(" RAM bytes writes."));
+      }
       ramWrites = 0;
-    }
-
-    if (slamSw && !slamSwPushed) { // active LOW
-      Serial.println(F("Slam Switch closed!"));
-      slamSwPushed = true;
-    }
-    else if (!slamSw && slamSwPushed) {
-      Serial.println(F("Slam Switch released"));
-      slamSwPushed = false;
     }
     
     // AUX button implementation
@@ -155,86 +142,9 @@ void loop() {
       resetPushed = true;
     }
     else resetPushed = false;
-  
-    // CPU stats output
-    Serial.print(iCount);
-    Serial.print(F(" istructions - "));
-    Serial.print(cCount);
-    Serial.print(F(" clock ticks (about) - "));
-    //Serial.print(irqCount - irqCalls);
-    Serial.print(irqCount);
-    Serial.print(F(" IRQ - adr: $"));
-    Serial.println(iADR, HEX);
-/*
-    // RIOTs stats output
-    Serial.print(F("RIOTs IRQ reqs: "));
-    for (i=0; i<3; i++) {
-      Serial.print(getRiotStats(i, RIOT_IRQ_COUNT));
-      if (i == 2) Serial.print(" - "); 
-      else Serial.print(", ");
-    }
-    Serial.print(F("RIOTs IRQ collisions: "));
-    for (i=0; i<3; i++) {
-      Serial.print(getRiotStats(i, RIOT_IRQ_COLL));
-      if (i == 2) {
-          Serial.print(" irqRequest="); 
-          Serial.println(irqRequest);
-      }
-      else Serial.print(", ");
-    }
-    Serial.print(F("RIOTs timer writes: "));
-    for (i=0; i<3; i++) {
-      Serial.print(getRiotStats(i, RIOT_TMR_WRTS));
-      if (i == 2) Serial.print(" - "); 
-      else Serial.print(", ");
-    }
-*/
     
-    Serial.print(F("RIOTs reads: "));
-    for (i=0; i<3; i++) {
-      Serial.print(i);
-      Serial.print(riotName[i]);
-      Serial.print(": (A=");
-      Serial.print(getRiotStats(i, RIOT_PA_READS));
-      Serial.print(",B=");
-      Serial.print(getRiotStats(i, RIOT_PB_READS));
-      if (i == 2) Serial.println(")"); else Serial.print("), ");
-    }
-    
-    Serial.print(F("RIOTs writes: "));
-    for (i=0; i<3; i++) {
-      Serial.print(i);
-      Serial.print(riotName[i]);
-      Serial.print(": (A=");
-      Serial.print(getRiotStats(i, RIOT_PA_WRTS));
-      Serial.print(",B=");
-      Serial.print(getRiotStats(i, RIOT_PB_WRTS));
-      if (i == 2) Serial.println(")"); else Serial.print("), ");
-    }
-/*
-    Serial.print(F("slamSwitch interrupts: "));
-    Serial.println(slamIntCount);
-*/
-    // outputs stats
-    Serial.print(F("Output changes: "));
-    for (i=0; i<5; i++) {
-      Serial.print(outpName[i]);
-      Serial.print(":");
-      Serial.print(getOutpCount(i));
-      if (i == 4) Serial.println(""); 
-      else Serial.print(", ");
-    }
-/*
-    // returns cache
-    Serial.print(F("Returns cache: ["));
-    for (i=0; i<8; i++) {
-      Serial.print(returnsCache[i]);
-      if (i == 7) Serial.println("]"); 
-      else Serial.print(", ");
-    }
-*/
-    // display output
-    printDisplays();
+    // statistic data output
+    if (SERIALOUT) printStats();
     
     // CPU lock detection
     if (iADR == prevAdr) {
@@ -287,9 +197,9 @@ void lcdprn(const char *st, byte line) {
   lcd.print(st);
 }
 
-// to call after an hardware interrupt event (ISR) -
+// 6502 emulator calls this function after an hardware interrupt event (ISR) -
 // updates Sys80 state after a DUE interrupt.
-// At least one of the 4 LS bits of dueIrq shoud be set
+// At least one of the 4 LS bits of dueIrq shoud be set.
 void onDueIrq() {
   byte id; // RIOT id
   byte irqBit;
@@ -306,10 +216,99 @@ void onDueIrq() {
       irqBit <<= 1;
     }
   }
+  interrupts();
   if (dueIrq & 0b1000) { // slam switch changed
     slamSw = (digitalRead(SLAM_PIN) == LOW);
     setRiotInputs(1, RIOTPORT_A, slamSw ? 0x80 : 0); // may yield 6502 IRQ
     dueIrq &= 0b11110111;
+    if (SERIALOUT) {
+      if (slamSw) Serial.println(F("Slam switch pressed!"));
+      else Serial.println(F("Slam switch released."));
+    }
   }
-  interrupts();
+}
+
+void printStats() {
+  int i;
+
+  // CPU stats output
+  Serial.print(iCnt);
+  Serial.print(F(" istructions - "));
+  Serial.print(cCnt);
+  Serial.print(F(" clock ticks (about) - "));
+  Serial.print(irqCount);
+  Serial.print(F(" IRQs - adr: $"));
+  Serial.println(iADR, HEX);
+  
+/*
+  // RIOTs stats output
+  Serial.print(F("RIOTs IRQ reqs: "));
+  for (i=0; i<3; i++) {
+    Serial.print(getRiotStats(i, RIOT_IRQ_COUNT));
+    if (i == 2) Serial.print(" - "); 
+    else Serial.print(", ");
+  }
+  Serial.print(F("RIOTs IRQ collisions: "));
+  for (i=0; i<3; i++) {
+    Serial.print(getRiotStats(i, RIOT_IRQ_COLL));
+    if (i == 2) {
+        Serial.print(" irqRequest="); 
+        Serial.println(irqRequest);
+    }
+    else Serial.print(", ");
+  }
+  Serial.print(F("RIOTs timer writes: "));
+  for (i=0; i<3; i++) {
+    Serial.print(getRiotStats(i, RIOT_TMR_WRTS));
+    if (i == 2) Serial.print(" - "); 
+    else Serial.print(", ");
+  }
+*/
+  
+  Serial.print(F("RIOTs reads: "));
+  for (i=0; i<3; i++) {
+    Serial.print(i);
+    Serial.print(riotName[i]);
+    Serial.print(": (A=");
+    Serial.print(getRiotStats(i, RIOT_PA_READS));
+    Serial.print(",B=");
+    Serial.print(getRiotStats(i, RIOT_PB_READS));
+    if (i == 2) Serial.println(")"); else Serial.print("), ");
+  }
+  
+  Serial.print(F("RIOTs writes: "));
+  for (i=0; i<3; i++) {
+    Serial.print(i);
+    Serial.print(riotName[i]);
+    Serial.print(": (A=");
+    Serial.print(getRiotStats(i, RIOT_PA_WRTS));
+    Serial.print(",B=");
+    Serial.print(getRiotStats(i, RIOT_PB_WRTS));
+    if (i == 2) Serial.println(")"); else Serial.print("), ");
+  }
+/*
+  Serial.print(F("slamSwitch interrupts: "));
+  Serial.println(slamIntCount);
+*/
+  // outputs stats
+  Serial.print(F("Output changes: "));
+  for (i=0; i<5; i++) {
+    Serial.print(outpName[i]);
+    Serial.print(":");
+    Serial.print(getOutpCount(i));
+    if (i == 4) Serial.println(""); 
+    else Serial.print(", ");
+  }
+/*
+  // returns cache
+  Serial.print(F("Returns cache: ["));
+  for (i=0; i<8; i++) {
+    Serial.print(returnsCache[i]);
+    if (i == 7) Serial.println("]"); 
+    else Serial.print(", ");
+  }
+*/
+  // display output
+  printDisplays();
+
 }

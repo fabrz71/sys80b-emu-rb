@@ -50,6 +50,7 @@ bool nmiRunning; // used for NMI priority over IRQ
 uint16_t irqCount = 0;
 uint16_t nmiCount = 0;
 uint32_t iCount; // executed istructions count for each batch
+uint32_t tCount; // (approx) CPU clock ticks for each batch
 
 // external variables
 extern volatile byte dueIrq; // (main code)
@@ -268,14 +269,15 @@ extern void mwrite(uint16_t adr, byte data); // (main code)
 extern void onDueIrq(); // (main code)
 
 long execBatch(long clkCount) {
-  unsigned long tCount = 0; // CPU clock ticks count
-  unsigned long lastChkClk = 0; // used for periodic externat check-routine call
   uint16_t prevPC = 0; // previous istruction adress
   uint16_t tmpw;
   byte tmpb;
   int tmpi;
 
   iCount = 0;
+  tCount = 0;
+  irqCount = 0;
+  nmiCount = 0;
   if (stopExecution) return iCount;
 
   do {
